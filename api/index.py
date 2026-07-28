@@ -49,7 +49,10 @@ PAGE_TEMPLATE = """<!doctype html>
   table {{ border-collapse: collapse; width: 100%; font-size: 0.85rem; }}
   th, td {{ border-bottom: 1px solid #8884; padding: 6px 8px; text-align: left;
            vertical-align: top; }}
-  th {{ white-space: nowrap; }}
+  th {{ white-space: nowrap; cursor: pointer; user-select: none; }}
+  th:hover {{ background: #8882; }}
+  th.asc::after {{ content: " ▲"; font-size: 0.7em; }}
+  th.desc::after {{ content: " ▼"; font-size: 0.7em; }}
   td.num {{ text-align: right; white-space: nowrap; }}
   td.date {{ white-space: nowrap; }}
   .cat {{ display: inline-block; padding: 1px 6px; border-radius: 4px;
@@ -77,6 +80,33 @@ PAGE_TEMPLATE = """<!doctype html>
   </div>
 </form>
 {body}
+<script>
+document.querySelectorAll("table th").forEach(function (th, idx) {{
+  th.title = "클릭하면 이 기준으로 정렬됩니다";
+  th.addEventListener("click", function () {{
+    var table = th.closest("table");
+    var tbody = table.querySelector("tbody");
+    var asc = !th.classList.contains("asc");
+    table.querySelectorAll("th").forEach(function (t) {{
+      t.classList.remove("asc", "desc");
+    }});
+    th.classList.add(asc ? "asc" : "desc");
+    var rows = Array.prototype.slice.call(tbody.rows);
+    rows.sort(function (a, b) {{
+      var ca = a.cells[idx], cb = b.cells[idx];
+      var na = ca.getAttribute("data-v"), nb = cb.getAttribute("data-v");
+      var r;
+      if (na !== null && nb !== null) {{
+        r = parseFloat(na) - parseFloat(nb);
+      }} else {{
+        r = ca.textContent.trim().localeCompare(cb.textContent.trim(), "ko");
+      }}
+      return asc ? r : -r;
+    }});
+    rows.forEach(function (r) {{ tbody.appendChild(r); }});
+  }});
+}});
+</script>
 </body>
 </html>"""
 
@@ -191,7 +221,8 @@ def render_rows(items: list[tuple[str, dict]]) -> str:
             f"<td>{esc(it.get('dminsttNm'))}</td>"
             f'<td class="date">{esc(it.get("bidNtceDt"))}</td>'
             f'<td class="date">{esc(it.get("bidClseDt"))}</td>'
-            f'<td class="num">{fmt_amount(it.get("presmptPrce"))}</td>'
+            f'<td class="num" data-v="{_amount_of(it) if _amount_of(it) is not None else -1}">'
+            f'{fmt_amount(it.get("presmptPrce"))}</td>'
             "</tr>"
         )
     return (
