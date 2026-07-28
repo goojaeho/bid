@@ -28,6 +28,25 @@ python -m app stats                        # 저장된 공고 현황
 
 수집 결과는 `data/bid.db`(SQLite)에 저장되며, 공고번호+차수 기준으로 중복 없이 갱신된다.
 
+## 웹 검색 (Vercel 배포)
+
+`api/index.py`는 Vercel 서버리스로 동작하는 실시간 검색 웹이다.
+DB 없이 검색 요청마다 나라장터 API를 직접 호출한다.
+
+1. Vercel에서 이 GitHub 리포를 Import (프레임워크: Other, 설정 변경 불필요)
+2. 프로젝트 **Settings → Environment Variables**에 `G2B_SERVICE_KEY` 추가 (발급받은 키)
+3. Redeploy → 접속하면 키워드/업무구분/기간으로 검색 가능
+
+키 설정 여부는 `https://<배포주소>/health`에서 확인할 수 있다 (`key_set: true`여야 정상).
+
+로컬에서 웹을 띄우려면:
+
+```bash
+pip install fastapi uvicorn
+uvicorn api.index:app --reload
+# http://127.0.0.1:8000 접속
+```
+
 ## 테스트
 
 ```bash
