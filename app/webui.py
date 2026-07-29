@@ -199,7 +199,7 @@ BASE = """<!doctype html>
   }
 </style>
 </head>
-<body data-ai="__AI__">
+<body data-ai="__AI__" data-sf="__SF__">
 <header>
   <div class="header-inner">
     <span class="brand">One<b>AI</b>Gen</span>
@@ -214,13 +214,27 @@ __CONTENT__
 <footer>출처: 나라장터 · 기업마당 · K-Startup · NIPA · KOCCA · DIP · 대구/경북/부산TP — 실시간 조회 결과이며 원문 공고를 반드시 확인하세요. · <a href="/kakao">카카오 알림 설정</a></footer>
 <script>
 var AI_ON = document.body.dataset.ai === "1";
+var SERVER_FAVS = document.body.dataset.sf === "1";
 var FAV_KEY = "oag_favs";
+var FAVS_MAP = null;
 
-function favs() {
+function localFavs() {
   try { return JSON.parse(localStorage.getItem(FAV_KEY) || "{}"); }
   catch (e) { return {}; }
 }
-function saveFavs(map) { localStorage.setItem(FAV_KEY, JSON.stringify(map)); }
+function favs() { return FAVS_MAP !== null ? FAVS_MAP : localFavs(); }
+function saveFavs(map) {
+  FAVS_MAP = map;
+  if (SERVER_FAVS) {
+    fetch("/api/favs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(map),
+    }).catch(function () {});
+  } else {
+    localStorage.setItem(FAV_KEY, JSON.stringify(map));
+  }
+}
 function escHtml(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
@@ -282,6 +296,19 @@ document.addEventListener("click", function (e) {
   if (window.renderFavs) window.renderFavs();
 });
 refreshRowFavs();
+if (SERVER_FAVS) {
+  fetch("/api/favs").then(function (r) { return r.json(); }).then(function (d) {
+    if (!d.ok) return;
+    FAVS_MAP = d.favs || {};
+    var local = localFavs();
+    if (!Object.keys(FAVS_MAP).length && Object.keys(local).length) {
+      FAVS_MAP = local;
+      saveFavs(FAVS_MAP);  // 기존 브라우저 저장분을 계정으로 자동 이전
+    }
+    refreshRowFavs();
+    if (window.renderFavs) window.renderFavs();
+  }).catch(function () {});
+}
 function bindPanel(detailTd, it) {
   var favBtn = detailTd.querySelector(".fav-btn");
   if (favBtn) favBtn.addEventListener("click", function () {
@@ -359,6 +386,7 @@ document.querySelectorAll("table th").forEach(function (th, idx) {
 
 def layout(title: str, heading: str, active_path: str, content: str,
            user: str | None = None) -> str:
+    from app import store
     parts = []
     for path, label in NAV_ITEMS:
         cls = ' class="active"' if path == active_path else ""
@@ -368,6 +396,7 @@ def layout(title: str, heading: str, active_path: str, content: str,
     if user:
         userbox = f'{user} <a href="/logout">로그아웃</a>'
     ai = "1" if os.environ.get("GEMINI_API_KEY", "").strip() else "0"
+    sf = "1" if (user and store.enabled()) else "0"
     return (
         BASE.replace("__TITLE__", title)
         .replace("__NAV__", nav)
@@ -375,4 +404,5 @@ def layout(title: str, heading: str, active_path: str, content: str,
         .replace("__CONTENT__", content)
         .replace("__USER__", userbox)
         .replace("__AI__", ai)
+        .replace("__SF__", sf)
     )

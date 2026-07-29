@@ -23,7 +23,9 @@ import json
 
 from fastapi.responses import RedirectResponse
 
-from app import auth, gov_sources, kakao, summarize
+from fastapi import Body
+
+from app import auth, gov_sources, kakao, store, summarize
 from app.g2b_client import CATEGORIES, G2BApiError, G2BClient
 from app.webui import layout
 
@@ -624,9 +626,12 @@ def favs_page(request: Request):
     redirect = gate(request)
     if redirect:
         return redirect
-    content = """<div class="card">
-  <p class="meta" style="margin:2px 0">공고 상세 패널에서 ☆ 즐겨찾기를 누르면 이 브라우저에 저장됩니다.</p>
-</div>
+    storage_note = ("로그인 계정에 저장되어 어느 기기에서나 보입니다."
+                    if (store.enabled() and user_of(request))
+                    else "현재 이 브라우저에 저장됩니다.")
+    content = f"""<div class="card">
+  <p class="meta" style="margin:2px 0">목록에서 ☆를 누르면 즐겨찾기에 저장됩니다. {storage_note}</p>
+</div>""" + """
 <div id="fav-list"></div>
 <script>
 window.renderFavs = function () {
@@ -663,6 +668,33 @@ window.renderFavs = function () {
 document.addEventListener("DOMContentLoaded", window.renderFavs);
 </script>"""
     return layout("즐겨찾기", "⭐ 즐겨찾기", "/favs", content, user=user_of(request))
+
+
+@app.get("/api/favs")
+def get_favs_api(request: Request):
+    email = user_of(request)
+    if not email:
+        return {"ok": False, "error": "로그인이 필요합니다."}
+    if not store.enabled():
+        return {"ok": False, "error": "서버 저장소가 설정되지 않았습니다."}
+    try:
+        return {"ok": True, "favs": store.get_favs(email)}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/favs")
+def set_favs_api(request: Request, favs: dict = Body(...)):
+    email = user_of(request)
+    if not email:
+        return {"ok": False, "error": "로그인이 필요합니다."}
+    if not store.enabled():
+        return {"ok": False, "error": "서버 저장소가 설정되지 않았습니다."}
+    try:
+        store.set_favs(email, favs)
+        return {"ok": True}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
 
 
 @app.get("/summarize")
