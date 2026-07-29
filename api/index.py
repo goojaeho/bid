@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse
 
 from app import gov_sources
@@ -182,6 +182,7 @@ def render_rows(items: list[tuple[str, dict]]) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 def search(
+    request: Request,
     q: str = Query("", max_length=100),
     cat: str = Query(""),
     days: int = Query(7),
@@ -196,6 +197,11 @@ def search(
         "q": q, "cat": cat, "days": days, "org": org,
         "min_amt": min_amt, "max_amt": max_amt, "sort": sort,
     }
+    # 첫 방문(쿼리 없음)에는 검색하지 않는다 — 즉시 로딩
+    if not request.query_params:
+        return render(params,
+            '<p class="meta">검색 조건을 입력하고 검색 버튼을 눌러주세요. '
+            "키워드 없이 검색하면 기간 내 전체 공고가 조회됩니다.</p>")
     key = get_service_key()
     if not key:
         return render(params,
@@ -324,6 +330,7 @@ def _gov_rows(items: list[dict]) -> str:
 
 @app.get("/gov", response_class=HTMLResponse)
 def gov(
+    request: Request,
     q: str = Query("", max_length=100),
     src: str = Query(""),
     region: str = Query(""),
@@ -333,6 +340,12 @@ def gov(
     state = state if state in GOV_STATES else "ing"
     sort = sort if sort in GOV_SORTS else "deadline"
     params = {"q": q, "src": src, "region": region, "state": state, "sort": sort}
+    # 첫 방문(쿼리 없음)에는 수집하지 않는다 — 즉시 로딩
+    if not request.query_params:
+        return layout("정부과제 검색", "정부과제·지원사업 검색", "/gov",
+            _gov_form(params)
+            + '<p class="meta">검색 조건을 선택하고 검색 버튼을 눌러주세요. '
+            "8개 출처(기업마당·K-Startup·NIPA·KOCCA·DIP·대구/경북/부산TP)를 실시간으로 수집합니다.</p>")
 
     names = [src] if src in gov_sources.SOURCES else list(gov_sources.SOURCES)
     items: list[dict] = []
