@@ -11,7 +11,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 from zoneinfo import ZoneInfo
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -54,7 +54,14 @@ SORT_CHOICES = {
     "amount": "금액 높은순",
 }
 
-MAX_QUERY_GROUPS = 3  # 나라장터 API 호출 수 제한을 위한 OR 그룹 상한
+MAX_QUERY_GROUPS = 3  # 나라장터 API 호출 수 제한을 위한 OR 그룹 상한 (입찰공고에만 적용)
+
+# 추천 검색 키워드 (환경변수로 변경 가능)
+RECOMMEND_BID = os.environ.get("RECOMMEND_KEYWORDS_BID", "소프트웨어,AI,정보시스템")
+RECOMMEND_GOV = os.environ.get(
+    "RECOMMEND_KEYWORDS_GOV",
+    "기술개발,R&D,글로벌,수출,투자,IR,AI,사업화,소프트웨어",
+)
 
 
 def parse_query(q: str) -> list[list[str]]:
@@ -67,7 +74,7 @@ def parse_query(q: str) -> list[list[str]]:
         terms = [t.lower() for t in part.split() if t.strip()]
         if terms:
             groups.append(terms)
-    return groups[:MAX_QUERY_GROUPS]
+    return groups
 
 
 def query_match(text: str, groups: list[list[str]]) -> bool:
@@ -94,6 +101,11 @@ def render(params: dict, body: str) -> str:
     min_amt = params["min_amt"] if params["min_amt"] is not None else ""
     max_amt = params["max_amt"] if params["max_amt"] is not None else ""
     form = f"""<form method="get" action="/" class="card">
+  <div class="row">
+    <span class="quick-label">빠른 검색</span>
+    <a class="chip" href="/?q={quote(RECOMMEND_BID)}&days=7"
+       title="추천 키워드: {esc(RECOMMEND_BID)}">⭐ {esc(RECOMMEND_BID.replace(",", " · "))}</a>
+  </div>
   <div class="row">
     <input type="text" name="q" value="{esc(params['q'])}" placeholder="키워드 — 쉼표(,)는 또는, 공백은 그리고 (예: 소프트웨어,홍보)">
     <select name="cat">{cat_options}</select>
@@ -240,7 +252,7 @@ def search(
     categories = [cat] if cat in CATEGORIES else CATEGORIES
 
     client = G2BClient(key)
-    groups = parse_query(q)
+    groups = parse_query(q)[:MAX_QUERY_GROUPS]
     # OR 그룹별로 가장 긴 단어를 API 검색어로 쓰고, 나머지 조건은 로컬에서 거른다
     api_terms = [max(g, key=len) for g in groups] or [None]
 
@@ -323,6 +335,11 @@ def _gov_form(params: dict) -> str:
         for k, v in GOV_SORTS.items()
     )
     return f"""<form method="get" action="/gov" class="card">
+  <div class="row">
+    <span class="quick-label">빠른 검색</span>
+    <a class="chip" href="/gov?q={quote(RECOMMEND_GOV)}&state=ing&sort=deadline"
+       title="추천 키워드: {esc(RECOMMEND_GOV)}">⭐ {esc(RECOMMEND_GOV.replace(",", " · "))}</a>
+  </div>
   <div class="row">
     <input type="text" name="q" value="{esc(params['q'])}" placeholder="키워드 — 쉼표(,)는 또는, 공백은 그리고 (예: AI,콘텐츠)">
     <select name="src">{src_options}</select>

@@ -103,6 +103,6 @@ class QueryParseTest(unittest.TestCase):
     def test_empty_matches_all(self):
         self.assertTrue(self.match("아무 공고", self.parse("")))
 
-    def test_group_cap(self):
+    def test_no_global_cap(self):
         groups = self.parse("a,b,c,d,e")
-        self.assertEqual(len(groups), 3)
+        self.assertEqual(len(groups), 5)

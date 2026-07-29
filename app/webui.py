@@ -84,6 +84,13 @@ BASE = """<!doctype html>
   }
   button:hover { background: var(--accent-dark); }
   .tilde { color: var(--muted); }
+  .quick-label { color: var(--muted); font-size: 0.82rem; font-weight: 700; }
+  .chip {
+    display: inline-block; padding: 7px 14px; border-radius: 999px;
+    background: #eef2ff; color: var(--accent); font-weight: 700;
+    font-size: 0.85rem; border: 1px solid #dbe3ff;
+  }
+  .chip:hover { background: #e2e9ff; text-decoration: none; }
 
   .meta { color: var(--muted); font-size: 0.85rem; margin: 4px 2px 10px; }
   .error {
