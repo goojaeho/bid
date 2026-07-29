@@ -34,6 +34,15 @@ KST = ZoneInfo("Asia/Seoul")
 app = FastAPI(title="나라장터 입찰공고 검색")
 
 
+@app.middleware("http")
+async def strip_vercel_rewrite_prefix(request: Request, call_next):
+    # Vercel 리라이트가 경로를 /api/index로 바꿔 전달하는 경우 원래 경로로 복원
+    path = request.scope.get("path", "")
+    if path == "/api/index" or path.startswith("/api/index/"):
+        request.scope["path"] = path[len("/api/index"):] or "/"
+    return await call_next(request)
+
+
 def user_of(request: Request) -> str | None:
     return auth.read_session(request.cookies.get(auth.COOKIE_NAME))
 
