@@ -19,13 +19,30 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse
 
-from app import gov_sources, kakao
+import json
+
+from fastapi.responses import RedirectResponse
+
+from app import auth, gov_sources, kakao, summarize
 from app.g2b_client import CATEGORIES, G2BApiError, G2BClient
 from app.webui import layout
 
 KST = ZoneInfo("Asia/Seoul")
 
 app = FastAPI(title="나라장터 입찰공고 검색")
+
+
+def user_of(request: Request) -> str | None:
+    return auth.read_session(request.cookies.get(auth.COOKIE_NAME))
+
+
+def gate(request: Request):
+    """로그인 강제. GOOGLE_CLIENT_ID 미설정 시에는 통과(설정 전 단계)."""
+    if not auth.enabled():
+        return None
+    if user_of(request):
+        return None
+    return RedirectResponse("/login", status_code=302)
 
 DAY_CHOICES = [1, 3, 7, 14, 30]
 
@@ -120,7 +137,8 @@ def render(params: dict, body: str) -> str:
     <select name="sort">{sort_options}</select>
   </div>
 </form>"""
-    return layout("나라장터 입찰공고 검색", "입찰공고 검색", "/", form + body)
+    return layout("나라장터 입찰공고 검색", "입찰공고 검색", "/", form + body,
+                  user=params.get("_user"))
 
 
 def _amount_of(item: dict) -> int | None:
@@ -196,8 +214,19 @@ def render_rows(items: list[tuple[str, dict]]) -> str:
         link = f'<a href="{esc(url)}" target="_blank">{title}</a>' if url else title
         cat_cls = f"cat-{category}" if category in CATEGORIES else "cat-default"
         close = it.get("bidClseDt")
+        payload = esc(json.dumps({
+            "t": it.get("bidNtceNm") or "",
+            "u": url,
+            "s": f"나라장터·{category}",
+            "o": it.get("dminsttNm") or "",
+            "on": it.get("ntceInsttNm") or "",
+            "b": str(it.get("bidNtceDt") or "")[:10],
+            "e": str(close or "")[:10],
+            "amt": fmt_amount(it.get("presmptPrce")) + "원" if _amount_of(it) else "",
+            "ai": 0,
+        }, ensure_ascii=False))
         rows.append(
-            "<tr>"
+            f'<tr class="xrow" data-item="{payload}" title="클릭하면 상세 정보가 열립니다">'
             f'<td class="nowrap"><span class="cat {cat_cls}">{category}</span></td>'
             f'<td class="title-cell">{link}</td>'
             f'<td class="nowrap">{esc(it.get("dminsttNm"))}</td>'
@@ -226,6 +255,9 @@ def search(
     max_amt: str = Query(""),
     sort: str = Query("latest"),
 ):
+    redirect = gate(request)
+    if redirect:
+        return redirect
     days = int(days) if days.isdigit() and int(days) in DAY_CHOICES else 7
     min_amt = int(min_amt) if min_amt.strip().isdigit() else None
     max_amt = int(max_amt) if max_amt.strip().isdigit() else None
@@ -233,6 +265,7 @@ def search(
     params = {
         "q": q, "cat": cat, "days": days, "org": org,
         "min_amt": min_amt, "max_amt": max_amt, "sort": sort,
+        "_user": user_of(request),
     }
     # 첫 방문(쿼리 없음)에는 검색하지 않는다 — 즉시 로딩
     if not request.query_params:
@@ -364,8 +397,16 @@ def _gov_rows(items: list[dict]) -> str:
             period = f'{esc(it["begin"] or "")} ~ {esc(it["end"] or "")}'
         elif it["status"]:
             period = esc(it["status"])
+        payload = esc(json.dumps({
+            "t": it["title"], "u": it["url"] or "", "s": it["source"],
+            "o": it["org"], "r": it["region"],
+            "b": it["begin"] or "", "e": it["end"] or "", "st": it["status"],
+            "tg": it.get("target") or "", "mt": it.get("method") or "",
+            "sm": it.get("summary") or "", "ct": it.get("contact") or "",
+            "ai": 1,
+        }, ensure_ascii=False))
         rows.append(
-            "<tr>"
+            f'<tr class="xrow" data-item="{payload}" title="클릭하면 상세 정보가 열립니다">'
             f'<td class="nowrap"><span class="cat src-{it["source"]}">{it["source"]}</span></td>'
             f'<td class="title-cell">{link}</td>'
             f'<td class="nowrap">{esc(it["org"])}</td>'
@@ -391,6 +432,9 @@ def gov(
     state: str = Query("ing"),
     sort: str = Query("deadline"),
 ):
+    redirect = gate(request)
+    if redirect:
+        return redirect
     state = state if state in GOV_STATES else "ing"
     sort = sort if sort in GOV_SORTS else "deadline"
     params = {"q": q, "src": src, "region": region, "state": state, "sort": sort}
@@ -399,7 +443,8 @@ def gov(
         return layout("정부과제 검색", "정부과제·지원사업 검색", "/gov",
             _gov_form(params)
             + '<p class="meta">검색 조건을 선택하고 검색 버튼을 눌러주세요. '
-            "8개 출처(기업마당·K-Startup·NIPA·KOCCA·DIP·대구/경북/부산TP)를 실시간으로 수집합니다.</p>")
+            "8개 출처(기업마당·K-Startup·NIPA·KOCCA·DIP·대구/경북/부산TP)를 실시간으로 수집합니다.</p>",
+            user=user_of(request))
 
     names = [src] if src in gov_sources.SOURCES else list(gov_sources.SOURCES)
     items: list[dict] = []
@@ -448,7 +493,8 @@ def gov(
     else:
         parts.append('<p class="meta">검색 결과가 없습니다. 키워드·필터를 조정해보세요.</p>')
 
-    return layout("정부과제 검색", "정부과제·지원사업 검색", "/gov", _gov_form(params) + "".join(parts))
+    return layout("정부과제 검색", "정부과제·지원사업 검색", "/gov",
+                  _gov_form(params) + "".join(parts), user=user_of(request))
 
 
 # ------------------------------------------------------------ 카카오 알림
@@ -527,6 +573,108 @@ def notify(request: Request):
     except kakao.KakaoError as e:
         return {"ok": False, "matched": len(matched), "error": str(e)}
     return {"ok": True, "matched": len(matched), "sent": True}
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page():
+    if not auth.enabled():
+        content = ('<div class="card"><p class="error">구글 로그인이 아직 설정되지 않았습니다. '
+                   "Vercel 환경변수에 GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET을 추가하세요.</p></div>")
+    else:
+        content = f"""<div class="card" style="text-align:center;padding:40px 20px">
+  <p style="margin:0 0 6px;font-weight:800;font-size:1.05rem">회사 전용 서비스입니다</p>
+  <p class="meta" style="margin:0 0 20px">구글 계정으로 로그인해주세요.</p>
+  <a href="{auth.login_url()}"><button type="button" style="padding:11px 28px">Google 계정으로 로그인</button></a>
+</div>"""
+    return layout("로그인", "로그인", "", content)
+
+
+@app.get("/auth/callback")
+def auth_callback(code: str = Query("")):
+    if not code:
+        return RedirectResponse("/login", status_code=302)
+    try:
+        email = auth.handle_callback(code)
+    except auth.AuthError as e:
+        return HTMLResponse(layout("로그인 실패", "로그인",
+            "", f'<div class="card"><p class="error">{esc(str(e))}</p></div>'))
+    if not auth.allowed(email):
+        return HTMLResponse(layout("접근 거부", "로그인", "",
+            f'<div class="card"><p class="error">{esc(email)} 계정은 접근 권한이 없습니다. '
+            "관리자에게 문의하세요.</p></div>"))
+    response = RedirectResponse("/", status_code=302)
+    response.set_cookie(
+        auth.COOKIE_NAME, auth.make_session(email),
+        max_age=auth.SESSION_MAX_AGE, httponly=True, secure=True, samesite="lax",
+    )
+    return response
+
+
+@app.get("/logout")
+def logout():
+    response = RedirectResponse("/login", status_code=302)
+    response.delete_cookie(auth.COOKIE_NAME)
+    return response
+
+
+@app.get("/favs", response_class=HTMLResponse)
+def favs_page(request: Request):
+    redirect = gate(request)
+    if redirect:
+        return redirect
+    content = """<div class="card">
+  <p class="meta" style="margin:2px 0">공고 상세 패널에서 ☆ 즐겨찾기를 누르면 이 브라우저에 저장됩니다.</p>
+</div>
+<div id="fav-list"></div>
+<script>
+window.renderFavs = function () {
+  var box = document.getElementById("fav-list");
+  var map = favs();
+  var items = Object.values(map);
+  if (!items.length) {
+    box.innerHTML = '<p class="meta">저장된 공고가 없습니다.</p>';
+    return;
+  }
+  items.sort(function (a, b) { return (a.e || "9999") < (b.e || "9999") ? -1 : 1; });
+  var rows = items.map(function (it) {
+    var cal = calUrl(it);
+    return '<tr class="xrow" data-item="' + escHtml(JSON.stringify(it)) + '">'
+      + '<td class="nowrap"><span class="cat cat-default">' + escHtml(it.s || "") + "</span></td>"
+      + '<td class="title-cell"><a href="' + escHtml(it.u) + '" target="_blank">' + escHtml(it.t) + "</a></td>"
+      + '<td class="nowrap">' + escHtml(it.o || "") + "</td>"
+      + '<td class="date">' + escHtml(it.e || "-") + "</td>"
+      + '<td class="nowrap">'
+      + (cal ? '<a class="btn-outline" style="padding:4px 10px;font-size:0.8rem" href="' + escHtml(cal) + '" target="_blank">📅</a> ' : "")
+      + '<button type="button" class="btn-outline fav-del" style="padding:4px 10px;font-size:0.8rem" data-u="' + escHtml(it.u) + '">삭제</button>'
+      + "</td></tr>";
+  }).join("");
+  box.innerHTML = '<div class="table-wrap"><table><thead><tr>'
+    + "<th>출처</th><th>공고명</th><th>기관</th><th>마감일</th><th>동작</th>"
+    + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
+  box.querySelectorAll(".fav-del").forEach(function (btn) {
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var map = favs(); delete map[btn.dataset.u]; saveFavs(map); window.renderFavs();
+    });
+  });
+};
+document.addEventListener("DOMContentLoaded", window.renderFavs);
+</script>"""
+    return layout("즐겨찾기", "⭐ 즐겨찾기", "/favs", content, user=user_of(request))
+
+
+@app.get("/summarize")
+def summarize_endpoint(request: Request, u: str = Query("", max_length=500)):
+    if auth.enabled() and not user_of(request):
+        return {"ok": False, "error": "로그인이 필요합니다."}
+    if not u:
+        return {"ok": False, "error": "URL이 없습니다."}
+    try:
+        return {"ok": True, "summary": summarize.summarize_url(u)}
+    except summarize.SummarizeError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
 @app.get("/kakao", response_class=HTMLResponse)

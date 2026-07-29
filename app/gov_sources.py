@@ -71,8 +71,17 @@ def _soup(resp: requests.Response) -> BeautifulSoup:
     return BeautifulSoup(resp.text, "html.parser")
 
 
-def _item(source, title, org, region, begin, end, status, url, reg_date) -> dict:
-    return {
+def _strip_html(text: str | None, limit: int = 400) -> str:
+    if not text:
+        return ""
+    cleaned = re.sub(r"<[^>]+>", " ", str(text))
+    cleaned = html_lib.unescape(re.sub(r"\s+", " ", cleaned)).strip()
+    return cleaned[:limit]
+
+
+def _item(source, title, org, region, begin, end, status, url, reg_date,
+          extras: dict | None = None) -> dict:
+    item = {
         "source": source,
         "title": html_lib.unescape(str(title or "")).strip(),
         "org": (org or "").strip(),
@@ -82,7 +91,14 @@ def _item(source, title, org, region, begin, end, status, url, reg_date) -> dict
         "status": (status or "").strip(),
         "url": url,
         "reg_date": reg_date,
+        "target": "",
+        "method": "",
+        "summary": "",
+        "contact": "",
     }
+    if extras:
+        item.update(extras)
+    return item
 
 
 # ---------------------------------------------------------------- API 소스
@@ -111,6 +127,12 @@ def fetch_bizinfo(count: int = 150) -> list[dict]:
             begin, end, "",
             it.get("pblancUrl"),
             _norm_date(it.get("creatPnttm")),
+            extras={
+                "target": _strip_html(it.get("trgetNm"), 200),
+                "method": _strip_html(it.get("reqstMthPapersCn"), 200),
+                "summary": _strip_html(it.get("bsnsSumryCn")),
+                "contact": _strip_html(it.get("refrncNm"), 200),
+            },
         ))
     return items
 
@@ -134,6 +156,11 @@ def fetch_kstartup(count: int = 100) -> list[dict]:
             "접수중" if it.get("rcrt_prgs_yn") == "Y" else "마감",
             it.get("detl_pg_url"),
             _norm_date(it.get("pbanc_rcpt_bgng_dt")),
+            extras={
+                "target": _strip_html(it.get("aply_trgt_ctnt") or it.get("aply_trgt"), 300),
+                "summary": _strip_html(it.get("pbanc_ctnt")),
+                "contact": _strip_html(it.get("prch_cnpl_no"), 100),
+            },
         ))
     return items
 
