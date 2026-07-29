@@ -1,3 +1,4 @@
 requests>=2.31
 python-dotenv>=1.0
 fastapi>=0.110
+beautifulsoup4>=4.12

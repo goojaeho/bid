@@ -19,6 +19,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 
+from app import gov_sources
 from app.g2b_client import CATEGORIES, G2BApiError, G2BClient
 from app.webui import layout
 
@@ -256,14 +257,131 @@ def search(
     return render(params, "".join(parts))
 
 
-@app.get("/gov", response_class=HTMLResponse)
-def gov():
-    content = (
-        '<div class="card"><p style="margin:4px 0">정부과제·지원사업 통합 검색을 준비하고 있습니다.</p>'
-        '<p class="meta" style="margin:8px 0 4px">연동 예정: 기업마당 · K-Startup · NIPA · KOCCA · '
-        "DIP(대구디지털혁신진흥원) · 대구/경북/부산 테크노파크</p></div>"
+GOV_REGIONS = ["대구", "경북", "부산", "전국"]
+GOV_SORTS = {"deadline": "마감 임박순", "latest": "등록일 최신순"}
+GOV_STATES = {"ing": "접수중만", "all": "전체 보기"}
+
+
+def _gov_form(params: dict) -> str:
+    src_options = '<option value="">전체 출처</option>' + "".join(
+        f'<option value="{s}"{" selected" if s == params["src"] else ""}>{s}</option>'
+        for s in gov_sources.SOURCES
     )
-    return layout("정부과제 검색", "정부과제 검색 (준비 중)", "/gov", content)
+    region_options = '<option value="">전체 지역</option>' + "".join(
+        f'<option value="{r}"{" selected" if r == params["region"] else ""}>{r}</option>'
+        for r in GOV_REGIONS
+    )
+    state_options = "".join(
+        f'<option value="{k}"{" selected" if k == params["state"] else ""}>{v}</option>'
+        for k, v in GOV_STATES.items()
+    )
+    sort_options = "".join(
+        f'<option value="{k}"{" selected" if k == params["sort"] else ""}>{v}</option>'
+        for k, v in GOV_SORTS.items()
+    )
+    return f"""<form method="get" action="/gov" class="card">
+  <div class="row">
+    <input type="text" name="q" value="{esc(params['q'])}" placeholder="공고명·기관명 키워드 (예: AI, 콘텐츠, 수출)">
+    <select name="src">{src_options}</select>
+    <select name="region">{region_options}</select>
+  </div>
+  <div class="row">
+    <select name="state">{state_options}</select>
+    <select name="sort">{sort_options}</select>
+    <button type="submit">검색</button>
+  </div>
+</form>"""
+
+
+def _gov_rows(items: list[dict]) -> str:
+    today = datetime.now(KST).date()
+    rows = []
+    for it in items:
+        title = esc(it["title"])
+        link = f'<a href="{esc(it["url"])}" target="_blank">{title}</a>' if it["url"] else title
+        period = ""
+        if it["begin"] or it["end"]:
+            period = f'{esc(it["begin"] or "")} ~ {esc(it["end"] or "")}'
+        elif it["status"]:
+            period = esc(it["status"])
+        rows.append(
+            "<tr>"
+            f'<td><span class="cat src-{it["source"]}">{it["source"]}</span></td>'
+            f"<td>{link}</td>"
+            f"<td>{esc(it['org'])}</td>"
+            f"<td>{esc(it['region'])}</td>"
+            f'<td class="date">{period}{d_day_badge(it["end"], today)}</td>'
+            f'<td class="date">{esc(it["reg_date"] or "-")}</td>'
+            "</tr>"
+        )
+    return (
+        '<div class="table-wrap"><table><thead><tr>'
+        "<th>출처</th><th>공고명</th><th>기관</th><th>지역</th>"
+        "<th>접수기간</th><th>등록일</th>"
+        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>"
+    )
+
+
+@app.get("/gov", response_class=HTMLResponse)
+def gov(
+    q: str = Query("", max_length=100),
+    src: str = Query(""),
+    region: str = Query(""),
+    state: str = Query("ing"),
+    sort: str = Query("deadline"),
+):
+    state = state if state in GOV_STATES else "ing"
+    sort = sort if sort in GOV_SORTS else "deadline"
+    params = {"q": q, "src": src, "region": region, "state": state, "sort": sort}
+
+    names = [src] if src in gov_sources.SOURCES else list(gov_sources.SOURCES)
+    items: list[dict] = []
+    errors: list[str] = []
+    with ThreadPoolExecutor(max_workers=len(names)) as pool:
+        futures = {pool.submit(gov_sources.fetch_source, n): n for n in names}
+        for future, name in futures.items():
+            try:
+                items.extend(future.result())
+            except Exception as e:
+                errors.append(f"{name}: {type(e).__name__}")
+
+    today = datetime.now(KST).date().isoformat()
+    if q:
+        needle = q.strip().lower()
+        items = [it for it in items
+                 if needle in it["title"].lower() or needle in it["org"].lower()]
+    if region:
+        items = [it for it in items
+                 if region in it["region"] or region in it["title"]]
+    if state == "ing":
+        items = [it for it in items
+                 if (it["end"] and it["end"] >= today)
+                 or (not it["end"] and it["status"] != "마감")]
+
+    if sort == "latest":
+        items.sort(key=lambda x: x["reg_date"] or "", reverse=True)
+    else:
+        items.sort(key=lambda x: (x["end"] is None, x["end"] or ""))
+
+    parts = []
+    if errors:
+        parts.append(f'<p class="error">일부 출처 수집 실패: {esc(", ".join(errors))}</p>')
+    missing_keys = []
+    if not os.environ.get("BIZINFO_API_KEY", "").strip() and (not src or src == "기업마당"):
+        missing_keys.append("기업마당(BIZINFO_API_KEY)")
+    if not os.environ.get("KSTARTUP_API_KEY", "").strip() and (not src or src == "K-Startup"):
+        missing_keys.append("K-Startup(KSTARTUP_API_KEY)")
+    if missing_keys:
+        parts.append(
+            f'<p class="meta">환경변수 미설정으로 제외된 출처: {esc(", ".join(missing_keys))}</p>'
+        )
+    if items:
+        parts.append(f'<p class="meta">검색 결과 {len(items):,}건 · 출처 {len(names)}곳 실시간 수집</p>')
+        parts.append(_gov_rows(items))
+    else:
+        parts.append('<p class="meta">검색 결과가 없습니다. 키워드·필터를 조정해보세요.</p>')
+
+    return layout("정부과제 검색", "정부과제·지원사업 검색", "/gov", _gov_form(params) + "".join(parts))
 
 
 @app.get("/health")

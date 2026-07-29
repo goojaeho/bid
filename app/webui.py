@@ -123,6 +123,14 @@ BASE = """<!doctype html>
   .cat-공사 { background: #fff1e3; color: #b45309; }
   .cat-외자 { background: #f3e8ff; color: #7e22ce; }
   .cat-default { background: #eef0f4; color: #4b5265; }
+  .src-기업마당 { background: #e9eeff; color: #2645cc; }
+  .src-K-Startup { background: #e6f6ec; color: #15803d; }
+  .src-NIPA { background: #f3e8ff; color: #7e22ce; }
+  .src-KOCCA { background: #fce7f3; color: #be185d; }
+  .src-DIP { background: #e6f6f4; color: #0e7569; }
+  .src-대구TP { background: #fff1e3; color: #b45309; }
+  .src-경북TP { background: #eef7d9; color: #4d7c0f; }
+  .src-부산TP { background: #e0f2fe; color: #0369a1; }
 
   .dd {
     display: inline-block; margin-left: 6px; padding: 1px 7px;
@@ -155,7 +163,7 @@ BASE = """<!doctype html>
 <h1>__HEADING__</h1>
 __CONTENT__
 </main>
-<footer>출처: 나라장터(조달청) 공공데이터 · 실시간 조회 결과이며 원문 공고를 반드시 확인하세요.</footer>
+<footer>출처: 나라장터 · 기업마당 · K-Startup · NIPA · KOCCA · DIP · 대구/경북/부산TP — 실시간 조회 결과이며 원문 공고를 반드시 확인하세요.</footer>
 <script>
 document.querySelectorAll("table th").forEach(function (th, idx) {
   th.title = "클릭하면 이 기준으로 정렬됩니다";
