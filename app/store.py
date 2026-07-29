@@ -1,13 +1,17 @@
-"""계정별 즐겨찾기 서버 저장소 (Upstash Redis REST).
+"""계정별 즐겨찾기 서버 저장소.
 
-Vercel 대시보드 Storage에서 Upstash Redis를 연결하면 환경변수
-(UPSTASH_REDIS_REST_URL/TOKEN 또는 KV_REST_API_URL/TOKEN)가 자동 주입된다.
+지원 백엔드 (우선순위 순):
+1. Supabase — SUPABASE_URL + SUPABASE_SERVICE_KEY 환경변수.
+   favs 테이블 필요: create table favs (email text primary key, data jsonb);
+2. Upstash Redis — UPSTASH_REDIS_REST_URL/TOKEN 또는 KV_REST_API_URL/TOKEN
+   (Vercel Storage 탭에서 연결 시 자동 주입)
 미설정 시 enabled()가 False → 프론트는 브라우저(localStorage) 저장으로 동작.
 """
 from __future__ import annotations
 
 import json
 import os
+from urllib.parse import quote
 
 import requests
 
@@ -15,7 +19,20 @@ TIMEOUT = 10
 MAX_ITEMS = 500
 
 
-def _conf() -> tuple[str, str] | None:
+class StoreError(Exception):
+    pass
+
+
+def _supabase_conf() -> tuple[str, str] | None:
+    url = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
+    key = (os.environ.get("SUPABASE_SERVICE_KEY")
+           or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
+    if url and key:
+        return url, key
+    return None
+
+
+def _upstash_conf() -> tuple[str, str] | None:
     url = (os.environ.get("UPSTASH_REDIS_REST_URL")
            or os.environ.get("KV_REST_API_URL") or "").strip().rstrip("/")
     token = (os.environ.get("UPSTASH_REDIS_REST_TOKEN")
@@ -26,18 +43,47 @@ def _conf() -> tuple[str, str] | None:
 
 
 def enabled() -> bool:
-    return _conf() is not None
+    return _supabase_conf() is not None or _upstash_conf() is not None
 
 
-class StoreError(Exception):
-    pass
+# ------------------------------------------------------------ Supabase
+
+def _sb_headers(key: str) -> dict:
+    return {"apikey": key, "Authorization": f"Bearer {key}"}
 
 
-def _command(cmd: list) -> dict:
-    conf = _conf()
-    if not conf:
-        raise StoreError("저장소가 설정되지 않았습니다.")
-    url, token = conf
+def _sb_get(email: str) -> dict:
+    url, key = _supabase_conf()
+    resp = requests.get(
+        f"{url}/rest/v1/favs",
+        params={"select": "data", "email": f"eq.{email}"},
+        headers=_sb_headers(key),
+        timeout=TIMEOUT,
+    )
+    if resp.status_code >= 400:
+        raise StoreError(f"Supabase 조회 실패({resp.status_code}): {resp.text[:150]}")
+    rows = resp.json()
+    if rows and isinstance(rows[0].get("data"), dict):
+        return rows[0]["data"]
+    return {}
+
+
+def _sb_set(email: str, favs: dict) -> None:
+    url, key = _supabase_conf()
+    resp = requests.post(
+        f"{url}/rest/v1/favs",
+        json={"email": email, "data": favs},
+        headers={**_sb_headers(key), "Prefer": "resolution=merge-duplicates"},
+        timeout=TIMEOUT,
+    )
+    if resp.status_code >= 400:
+        raise StoreError(f"Supabase 저장 실패({resp.status_code}): {resp.text[:150]}")
+
+
+# ------------------------------------------------------------ Upstash
+
+def _redis_command(cmd: list) -> dict:
+    url, token = _upstash_conf()
     resp = requests.post(
         url, json=cmd,
         headers={"Authorization": f"Bearer {token}"},
@@ -49,8 +95,8 @@ def _command(cmd: list) -> dict:
     return data
 
 
-def get_favs(email: str) -> dict:
-    data = _command(["GET", f"favs:{email.lower()}"])
+def _redis_get(email: str) -> dict:
+    data = _redis_command(["GET", f"favs:{email}"])
     raw = data.get("result")
     if not raw:
         return {}
@@ -61,9 +107,29 @@ def get_favs(email: str) -> dict:
         return {}
 
 
+def _redis_set(email: str, favs: dict) -> None:
+    _redis_command(["SET", f"favs:{email}", json.dumps(favs, ensure_ascii=False)])
+
+
+# ------------------------------------------------------------ 공용 API
+
+def get_favs(email: str) -> dict:
+    email = email.lower()
+    if _supabase_conf():
+        return _sb_get(email)
+    if _upstash_conf():
+        return _redis_get(email)
+    raise StoreError("저장소가 설정되지 않았습니다.")
+
+
 def set_favs(email: str, favs: dict) -> None:
     if not isinstance(favs, dict):
         raise StoreError("잘못된 형식입니다.")
     if len(favs) > MAX_ITEMS:
         favs = dict(list(favs.items())[:MAX_ITEMS])
-    _command(["SET", f"favs:{email.lower()}", json.dumps(favs, ensure_ascii=False)])
+    email = email.lower()
+    if _supabase_conf():
+        return _sb_set(email, favs)
+    if _upstash_conf():
+        return _redis_set(email, favs)
+    raise StoreError("저장소가 설정되지 않았습니다.")
