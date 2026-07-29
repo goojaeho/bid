@@ -227,6 +227,7 @@ def render_rows(items: list[tuple[str, dict]]) -> str:
         }, ensure_ascii=False))
         rows.append(
             f'<tr class="xrow" data-item="{payload}" title="클릭하면 상세 정보가 열립니다">'
+            '<td class="nowrap"><button type="button" class="row-fav" title="즐겨찾기">☆</button></td>'
             f'<td class="nowrap"><span class="cat {cat_cls}">{category}</span></td>'
             f'<td class="title-cell">{link}</td>'
             f'<td class="nowrap">{esc(it.get("dminsttNm"))}</td>'
@@ -234,13 +235,12 @@ def render_rows(items: list[tuple[str, dict]]) -> str:
             f'<td class="date">{esc(str(close or "")[:16])}{d_day_badge(close, today)}</td>'
             f'<td class="num" data-v="{_amount_of(it) if _amount_of(it) is not None else -1}">'
             f'{fmt_amount(it.get("presmptPrce"))}</td>'
-            '<td class="nowrap"><button type="button" class="row-fav" title="즐겨찾기">☆</button></td>'
             "</tr>"
         )
     return (
         '<div class="table-wrap"><table><thead><tr>'
-        "<th>구분</th><th>공고명</th><th>수요기관</th>"
-        "<th>공고일</th><th>마감일</th><th>추정가격(원)</th><th>저장</th>"
+        "<th>저장</th><th>구분</th><th>공고명</th><th>수요기관</th>"
+        "<th>공고일</th><th>마감일</th><th>추정가격(원)</th>"
         "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>"
     )
 
@@ -408,19 +408,19 @@ def _gov_rows(items: list[dict]) -> str:
         }, ensure_ascii=False))
         rows.append(
             f'<tr class="xrow" data-item="{payload}" title="클릭하면 상세 정보가 열립니다">'
+            '<td class="nowrap"><button type="button" class="row-fav" title="즐겨찾기">☆</button></td>'
             f'<td class="nowrap"><span class="cat src-{it["source"]}">{it["source"]}</span></td>'
             f'<td class="title-cell">{link}</td>'
             f'<td class="nowrap">{esc(it["org"])}</td>'
             f'<td class="nowrap">{esc(it["region"])}</td>'
             f'<td class="date">{period}{d_day_badge(it["end"], today)}</td>'
             f'<td class="date">{esc(it["reg_date"] or "-")}</td>'
-            '<td class="nowrap"><button type="button" class="row-fav" title="즐겨찾기">☆</button></td>'
             "</tr>"
         )
     return (
         '<div class="table-wrap"><table><thead><tr>'
-        "<th>출처</th><th>공고명</th><th>기관</th><th>지역</th>"
-        "<th>접수기간</th><th>등록일</th><th>저장</th>"
+        "<th>저장</th><th>출처</th><th>공고명</th><th>기관</th><th>지역</th>"
+        "<th>접수기간</th><th>등록일</th>"
         "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>"
     )
 
