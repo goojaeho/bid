@@ -181,6 +181,12 @@ BASE = """<!doctype html>
     font-size: 0.87rem; white-space: pre-wrap;
   }
   .ai-sum.loading { background: #f5f6f8; border-color: var(--line); color: var(--muted); }
+  .row-fav {
+    background: none; border: none; font-size: 1.15rem; cursor: pointer;
+    padding: 0 6px; color: #c8cdd8; line-height: 1;
+  }
+  .row-fav:hover { color: #f59e0b; background: none; }
+  .row-fav.on { color: #f59e0b; }
 
   footer {
     max-width: 1140px; margin: 0 auto; padding: 0 20px 32px;
@@ -251,6 +257,31 @@ function panelHtml(it) {
 function closePanels(tbody) {
   tbody.querySelectorAll("tr.detail-row").forEach(function (r) { r.remove(); });
 }
+function refreshRowFavs() {
+  var map = favs();
+  document.querySelectorAll("tr.xrow").forEach(function (tr) {
+    var btn = tr.querySelector(".row-fav");
+    if (!btn) return;
+    var it = JSON.parse(tr.dataset.item);
+    var on = !!map[it.u];
+    btn.textContent = on ? "★" : "☆";
+    btn.classList.toggle("on", on);
+  });
+}
+document.addEventListener("click", function (e) {
+  var btn = e.target.closest(".row-fav");
+  if (!btn) return;
+  e.stopPropagation();
+  var tr = btn.closest("tr.xrow");
+  if (!tr) return;
+  var it = JSON.parse(tr.dataset.item);
+  var map = favs();
+  if (map[it.u]) delete map[it.u]; else map[it.u] = it;
+  saveFavs(map);
+  refreshRowFavs();
+  if (window.renderFavs) window.renderFavs();
+});
+refreshRowFavs();
 function bindPanel(detailTd, it) {
   var favBtn = detailTd.querySelector(".fav-btn");
   if (favBtn) favBtn.addEventListener("click", function () {
@@ -258,6 +289,7 @@ function bindPanel(detailTd, it) {
     if (map[it.u]) { delete map[it.u]; favBtn.textContent = "☆ 즐겨찾기"; favBtn.classList.remove("btn-fav-on"); }
     else { map[it.u] = it; favBtn.textContent = "★ 즐겨찾기 해제"; favBtn.classList.add("btn-fav-on"); }
     saveFavs(map);
+    refreshRowFavs();
     if (window.renderFavs) window.renderFavs();
   });
   var aiBtn = detailTd.querySelector(".ai-btn");
