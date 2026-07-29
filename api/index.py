@@ -185,13 +185,15 @@ def search(
     request: Request,
     q: str = Query("", max_length=100),
     cat: str = Query(""),
-    days: int = Query(7),
+    days: str = Query("7"),
     org: str = Query("", max_length=50),
-    min_amt: int | None = Query(None, ge=0),
-    max_amt: int | None = Query(None, ge=0),
+    min_amt: str = Query(""),
+    max_amt: str = Query(""),
     sort: str = Query("latest"),
 ):
-    days = days if days in DAY_CHOICES else 7
+    days = int(days) if days.isdigit() and int(days) in DAY_CHOICES else 7
+    min_amt = int(min_amt) if min_amt.strip().isdigit() else None
+    max_amt = int(max_amt) if max_amt.strip().isdigit() else None
     sort = sort if sort in SORT_CHOICES else "latest"
     params = {
         "q": q, "cat": cat, "days": days, "org": org,
