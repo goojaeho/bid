@@ -19,7 +19,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse
 
-from app import gov_sources
+from app import gov_sources, kakao
 from app.g2b_client import CATEGORIES, G2BApiError, G2BClient
 from app.webui import layout
 
@@ -395,6 +395,139 @@ def gov(
         parts.append('<p class="meta">검색 결과가 없습니다. 키워드·필터를 조정해보세요.</p>')
 
     return layout("정부과제 검색", "정부과제·지원사업 검색", "/gov", _gov_form(params) + "".join(parts))
+
+
+# ------------------------------------------------------------ 카카오 알림
+
+def _notify_keywords() -> list[str]:
+    raw = os.environ.get("NOTIFY_KEYWORDS", "")
+    return [k.strip() for k in raw.split(",") if k.strip()]
+
+
+def collect_new_notices(keywords: list[str]) -> list[dict]:
+    """최근 1일 신규 공고 중 키워드 매칭 건 수집 (정부과제 + 나라장터)."""
+    since = (datetime.now(KST) - timedelta(days=1)).date().isoformat()
+    matched: list[dict] = []
+
+    def hit(title: str) -> bool:
+        t = (title or "").lower()
+        return any(k.lower() in t for k in keywords)
+
+    # 정부과제 8개 출처
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(gov_sources.fetch_source, n): n
+                   for n in gov_sources.SOURCES}
+        for future in futures:
+            try:
+                for it in future.result():
+                    recent = (it["reg_date"] or it["begin"] or "") >= since
+                    if recent and hit(it["title"]):
+                        matched.append({"title": it["title"], "source": it["source"]})
+            except Exception:
+                continue
+
+    # 나라장터 최근 1일
+    key = get_service_key()
+    if key:
+        client = G2BClient(key)
+        now = datetime.now(KST)
+        bgn = (now - timedelta(days=1)).strftime("%Y%m%d%H%M")
+        end = now.strftime("%Y%m%d%H%M")
+        for category in CATEGORIES:
+            try:
+                result = client.fetch_page(category, bgn, end, num_of_rows=100)
+                for it in result["items"]:
+                    if hit(it.get("bidNtceNm") or ""):
+                        matched.append({"title": it.get("bidNtceNm"), "source": f"나라장터·{category}"})
+            except Exception:
+                continue
+    return matched
+
+
+def build_notify_message(matched: list[dict]) -> str:
+    lines = [f"[OneAIGen] 신규 공고 {len(matched)}건"]
+    for m in matched[:4]:
+        title = m["title"][:38] + ("…" if len(m["title"]) > 38 else "")
+        lines.append(f"· {title} ({m['source']})")
+    if len(matched) > 4:
+        lines.append(f"…외 {len(matched) - 4}건")
+    return "\n".join(lines)
+
+
+@app.get("/notify")
+def notify(request: Request):
+    secret = os.environ.get("CRON_SECRET", "").strip()
+    if secret:
+        auth = request.headers.get("authorization", "")
+        if auth != f"Bearer {secret}" and request.query_params.get("secret") != secret:
+            return {"ok": False, "error": "unauthorized"}
+
+    keywords = _notify_keywords()
+    if not keywords:
+        return {"ok": False, "error": "NOTIFY_KEYWORDS 환경변수가 비어 있습니다 (예: 홍보,AI)"}
+    matched = collect_new_notices(keywords)
+    if not matched:
+        return {"ok": True, "matched": 0, "sent": False}
+    try:
+        kakao.send_memo(build_notify_message(matched))
+    except kakao.KakaoError as e:
+        return {"ok": False, "matched": len(matched), "error": str(e)}
+    return {"ok": True, "matched": len(matched), "sent": True}
+
+
+@app.get("/kakao", response_class=HTMLResponse)
+def kakao_page():
+    connected = kakao.refresh_token() is not None
+    status = ("✅ 카카오 계정이 연결되어 있습니다." if connected
+              else "아직 연결되지 않았습니다.")
+    keywords = ", ".join(_notify_keywords()) or "(미설정 — NOTIFY_KEYWORDS 환경변수)"
+    content = f"""<div class="card">
+  <p style="margin:4px 0 12px"><b>카카오톡 알림 설정</b> — 새 공고가 뜨면 내 카카오톡으로 알림을 받습니다.</p>
+  <p class="meta">상태: {status} · 알림 키워드: {esc(keywords)}</p>
+  <p style="margin:14px 0 4px">
+    <a href="{kakao.authorize_url()}"><button type="button">카카오 계정 연결하기</button></a>
+    <a href="/kakao/test" style="margin-left:8px"><button type="button" style="background:#6b7280;border-color:#6b7280">테스트 메시지 보내기</button></a>
+  </p>
+  <p class="meta" style="margin-top:12px">연결 후 발급되는 토큰을 Vercel 환경변수(KAKAO_REFRESH_TOKEN)에 넣으면
+  매일 아침 8시에 신규 공고 알림이 발송됩니다.</p>
+</div>"""
+    return layout("카카오 알림 설정", "카카오톡 알림", "/kakao", content)
+
+
+@app.get("/kakao/callback", response_class=HTMLResponse)
+def kakao_callback(code: str = Query("")):
+    if not code:
+        return layout("카카오 연결 실패", "카카오톡 알림", "/kakao",
+                      '<div class="card"><p class="error">인가 코드가 없습니다. 다시 시도해주세요.</p></div>')
+    try:
+        tokens = kakao.exchange_code(code)
+        kakao.send_memo(
+            "[OneAIGen] 카카오톡 알림 연결 성공! 이제 신규 공고 알림을 받을 수 있습니다.",
+            access_token=tokens["access_token"],
+        )
+        sent_note = "테스트 메시지를 방금 카카오톡으로 보냈습니다. 확인해보세요!"
+    except kakao.KakaoError as e:
+        return layout("카카오 연결 실패", "카카오톡 알림", "/kakao",
+                      f'<div class="card"><p class="error">{esc(str(e))}</p></div>')
+    refresh = tokens.get("refresh_token", "")
+    content = f"""<div class="card">
+  <p style="margin:4px 0"><b>✅ 연결 성공!</b> {sent_note}</p>
+  <p style="margin:14px 0 6px">마지막 단계 — 아래 토큰을 Vercel 환경변수에 추가하세요:</p>
+  <p class="meta">이름: <b>KAKAO_REFRESH_TOKEN</b></p>
+  <p style="word-break:break-all;background:#f5f6f8;border-radius:8px;padding:12px;font-size:0.85rem">{esc(refresh)}</p>
+  <p class="meta">Vercel → Settings → Environment Variables → 추가 후 Redeploy 하면 매일 아침 알림이 활성화됩니다.</p>
+</div>"""
+    return layout("카카오 연결 완료", "카카오톡 알림", "/kakao", content)
+
+
+@app.get("/kakao/test", response_class=HTMLResponse)
+def kakao_test():
+    try:
+        kakao.send_memo("[OneAIGen] 테스트 메시지입니다. 알림 연동이 정상 작동 중입니다.")
+        msg = '<p style="margin:4px 0">✅ 테스트 메시지를 보냈습니다. 카카오톡을 확인하세요.</p>'
+    except kakao.KakaoError as e:
+        msg = f'<p class="error">{esc(str(e))}</p>'
+    return layout("카카오 테스트", "카카오톡 알림", "/kakao", f'<div class="card">{msg}</div>')
 
 
 @app.get("/health")
