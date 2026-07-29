@@ -70,6 +70,7 @@ BASE = """<!doctype html>
     border: 1px solid #d5d9e2; border-radius: 8px;
     padding: 9px 12px; background: #fff; color: var(--text);
   }
+  select { min-width: 120px; }
   input:focus, select:focus {
     outline: none; border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(53, 87, 240, 0.12);
@@ -113,6 +114,8 @@ BASE = """<!doctype html>
   td a:hover { color: var(--accent); }
   td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
   td.date { white-space: nowrap; color: var(--muted); font-size: 0.84rem; }
+  td.nowrap { white-space: nowrap; }
+  td.title-cell { min-width: 280px; }
 
   .cat {
     display: inline-block; padding: 2px 9px; border-radius: 999px;

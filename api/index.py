@@ -163,9 +163,9 @@ def render_rows(items: list[tuple[str, dict]]) -> str:
         close = it.get("bidClseDt")
         rows.append(
             "<tr>"
-            f'<td><span class="cat {cat_cls}">{category}</span></td>'
-            f"<td>{link}</td>"
-            f"<td>{esc(it.get('dminsttNm'))}</td>"
+            f'<td class="nowrap"><span class="cat {cat_cls}">{category}</span></td>'
+            f'<td class="title-cell">{link}</td>'
+            f'<td class="nowrap">{esc(it.get("dminsttNm"))}</td>'
             f'<td class="date">{esc(str(it.get("bidNtceDt") or "")[:16])}</td>'
             f'<td class="date">{esc(str(close or "")[:16])}{d_day_badge(close, today)}</td>'
             f'<td class="num" data-v="{_amount_of(it) if _amount_of(it) is not None else -1}">'
@@ -312,10 +312,10 @@ def _gov_rows(items: list[dict]) -> str:
             period = esc(it["status"])
         rows.append(
             "<tr>"
-            f'<td><span class="cat src-{it["source"]}">{it["source"]}</span></td>'
-            f"<td>{link}</td>"
-            f"<td>{esc(it['org'])}</td>"
-            f"<td>{esc(it['region'])}</td>"
+            f'<td class="nowrap"><span class="cat src-{it["source"]}">{it["source"]}</span></td>'
+            f'<td class="title-cell">{link}</td>'
+            f'<td class="nowrap">{esc(it["org"])}</td>'
+            f'<td class="nowrap">{esc(it["region"])}</td>'
             f'<td class="date">{period}{d_day_badge(it["end"], today)}</td>'
             f'<td class="date">{esc(it["reg_date"] or "-")}</td>'
             "</tr>"
