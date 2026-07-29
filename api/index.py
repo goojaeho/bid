@@ -20,95 +20,13 @@ from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 
 from app.g2b_client import CATEGORIES, G2BApiError, G2BClient
+from app.webui import layout
 
 KST = ZoneInfo("Asia/Seoul")
 
 app = FastAPI(title="나라장터 입찰공고 검색")
 
 DAY_CHOICES = [1, 3, 7, 14, 30]
-
-PAGE_TEMPLATE = """<!doctype html>
-<html lang="ko">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>나라장터 입찰공고 검색</title>
-<style>
-  :root {{ color-scheme: light dark; }}
-  body {{ font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
-         max-width: 1100px; margin: 0 auto; padding: 16px; }}
-  h1 {{ font-size: 1.3rem; }}
-  form {{ margin-bottom: 16px; }}
-  .row {{ display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-         margin-bottom: 8px; }}
-  input[type=text] {{ flex: 1; min-width: 200px; padding: 8px; }}
-  input[type=text].org {{ flex: 0 1 220px; min-width: 160px; }}
-  input[type=number].amt {{ width: 130px; padding: 8px; }}
-  select, button {{ padding: 8px; }}
-  button {{ cursor: pointer; font-weight: bold; }}
-  table {{ border-collapse: collapse; width: 100%; font-size: 0.85rem; }}
-  th, td {{ border-bottom: 1px solid #8884; padding: 6px 8px; text-align: left;
-           vertical-align: top; }}
-  th {{ white-space: nowrap; cursor: pointer; user-select: none; }}
-  th:hover {{ background: #8882; }}
-  th.asc::after {{ content: " ▲"; font-size: 0.7em; }}
-  th.desc::after {{ content: " ▼"; font-size: 0.7em; }}
-  td.num {{ text-align: right; white-space: nowrap; }}
-  td.date {{ white-space: nowrap; }}
-  .cat {{ display: inline-block; padding: 1px 6px; border-radius: 4px;
-         background: #8883; font-size: 0.75rem; white-space: nowrap; }}
-  .error {{ color: #c00; padding: 12px; border: 1px solid #c003;
-           border-radius: 6px; }}
-  .meta {{ color: #888; font-size: 0.8rem; margin: 8px 0; }}
-</style>
-</head>
-<body>
-<h1>나라장터 입찰공고 검색</h1>
-<form method="get" action="/">
-  <div class="row">
-    <input type="text" name="q" value="{q}" placeholder="공고명 키워드 (예: 소프트웨어)">
-    <select name="cat">{cat_options}</select>
-    <select name="days">{day_options}</select>
-    <button type="submit">검색</button>
-  </div>
-  <div class="row">
-    <input type="text" name="org" value="{org}" placeholder="기관명 (예: 학교, 서울시)" class="org">
-    <input type="number" name="min_amt" value="{min_amt}" placeholder="최소금액(만원)" min="0" class="amt">
-    <span>~</span>
-    <input type="number" name="max_amt" value="{max_amt}" placeholder="최대금액(만원)" min="0" class="amt">
-    <select name="sort">{sort_options}</select>
-  </div>
-</form>
-{body}
-<script>
-document.querySelectorAll("table th").forEach(function (th, idx) {{
-  th.title = "클릭하면 이 기준으로 정렬됩니다";
-  th.addEventListener("click", function () {{
-    var table = th.closest("table");
-    var tbody = table.querySelector("tbody");
-    var asc = !th.classList.contains("asc");
-    table.querySelectorAll("th").forEach(function (t) {{
-      t.classList.remove("asc", "desc");
-    }});
-    th.classList.add(asc ? "asc" : "desc");
-    var rows = Array.prototype.slice.call(tbody.rows);
-    rows.sort(function (a, b) {{
-      var ca = a.cells[idx], cb = b.cells[idx];
-      var na = ca.getAttribute("data-v"), nb = cb.getAttribute("data-v");
-      var r;
-      if (na !== null && nb !== null) {{
-        r = parseFloat(na) - parseFloat(nb);
-      }} else {{
-        r = ca.textContent.trim().localeCompare(cb.textContent.trim(), "ko");
-      }}
-      return asc ? r : -r;
-    }});
-    rows.forEach(function (r) {{ tbody.appendChild(r); }});
-  }});
-}});
-</script>
-</body>
-</html>"""
 
 
 def esc(v) -> str:
@@ -137,7 +55,7 @@ SORT_CHOICES = {
 
 
 def render(params: dict, body: str) -> str:
-    cat_options = '<option value="">전체</option>' + "".join(
+    cat_options = '<option value="">전체 구분</option>' + "".join(
         f'<option value="{c}"{" selected" if c == params["cat"] else ""}>{c}</option>'
         for c in CATEGORIES
     )
@@ -149,16 +67,24 @@ def render(params: dict, body: str) -> str:
         f'<option value="{k}"{" selected" if k == params["sort"] else ""}>{v}</option>'
         for k, v in SORT_CHOICES.items()
     )
-    return PAGE_TEMPLATE.format(
-        q=esc(params["q"]),
-        org=esc(params["org"]),
-        min_amt=params["min_amt"] if params["min_amt"] is not None else "",
-        max_amt=params["max_amt"] if params["max_amt"] is not None else "",
-        cat_options=cat_options,
-        day_options=day_options,
-        sort_options=sort_options,
-        body=body,
-    )
+    min_amt = params["min_amt"] if params["min_amt"] is not None else ""
+    max_amt = params["max_amt"] if params["max_amt"] is not None else ""
+    form = f"""<form method="get" action="/" class="card">
+  <div class="row">
+    <input type="text" name="q" value="{esc(params['q'])}" placeholder="공고명 키워드 (예: 소프트웨어)">
+    <select name="cat">{cat_options}</select>
+    <select name="days">{day_options}</select>
+    <button type="submit">검색</button>
+  </div>
+  <div class="row">
+    <input type="text" name="org" value="{esc(params['org'])}" placeholder="기관명 (예: 학교, 서울시)" class="org">
+    <input type="number" name="min_amt" value="{min_amt}" placeholder="최소금액(만원)" min="0" class="amt">
+    <span class="tilde">~</span>
+    <input type="number" name="max_amt" value="{max_amt}" placeholder="최대금액(만원)" min="0" class="amt">
+    <select name="sort">{sort_options}</select>
+  </div>
+</form>"""
+    return layout("나라장터 입찰공고 검색", "입찰공고 검색", "/", form + body)
 
 
 def _amount_of(item: dict) -> int | None:
@@ -208,28 +134,48 @@ def sort_items(
     return sorted(items, key=lambda x: x[1].get("bidNtceDt") or "", reverse=True)
 
 
+def d_day_badge(close: str | None, today) -> str:
+    """마감일 문자열('YYYY-MM-DD ...')로 D-day 배지 HTML 생성."""
+    if not close:
+        return ""
+    try:
+        close_date = datetime.strptime(str(close)[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return ""
+    diff = (close_date - today).days
+    if diff < 0:
+        return '<span class="dd past">마감</span>'
+    if diff == 0:
+        return '<span class="dd hot">오늘</span>'
+    cls = "hot" if diff <= 3 else ("warn" if diff <= 7 else "cool")
+    return f'<span class="dd {cls}">D-{diff}</span>'
+
+
 def render_rows(items: list[tuple[str, dict]]) -> str:
+    today = datetime.now(KST).date()
     rows = []
     for category, it in items:
         url = it.get("bidNtceDtlUrl") or it.get("bidNtceUrl") or ""
         title = esc(it.get("bidNtceNm"))
         link = f'<a href="{esc(url)}" target="_blank">{title}</a>' if url else title
+        cat_cls = f"cat-{category}" if category in CATEGORIES else "cat-default"
+        close = it.get("bidClseDt")
         rows.append(
             "<tr>"
-            f'<td><span class="cat">{category}</span></td>'
+            f'<td><span class="cat {cat_cls}">{category}</span></td>'
             f"<td>{link}</td>"
             f"<td>{esc(it.get('dminsttNm'))}</td>"
-            f'<td class="date">{esc(it.get("bidNtceDt"))}</td>'
-            f'<td class="date">{esc(it.get("bidClseDt"))}</td>'
+            f'<td class="date">{esc(str(it.get("bidNtceDt") or "")[:16])}</td>'
+            f'<td class="date">{esc(str(close or "")[:16])}{d_day_badge(close, today)}</td>'
             f'<td class="num" data-v="{_amount_of(it) if _amount_of(it) is not None else -1}">'
             f'{fmt_amount(it.get("presmptPrce"))}</td>'
             "</tr>"
         )
     return (
-        "<table><thead><tr>"
+        '<div class="table-wrap"><table><thead><tr>'
         "<th>구분</th><th>공고명</th><th>수요기관</th>"
         "<th>공고일</th><th>마감일</th><th>추정가격(원)</th>"
-        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
+        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>"
     )
 
 
@@ -308,6 +254,16 @@ def search(
         )
 
     return render(params, "".join(parts))
+
+
+@app.get("/gov", response_class=HTMLResponse)
+def gov():
+    content = (
+        '<div class="card"><p style="margin:4px 0">정부과제·지원사업 통합 검색을 준비하고 있습니다.</p>'
+        '<p class="meta" style="margin:8px 0 4px">연동 예정: 기업마당 · K-Startup · NIPA · KOCCA · '
+        "DIP(대구디지털혁신진흥원) · 대구/경북/부산 테크노파크</p></div>"
+    )
+    return layout("정부과제 검색", "정부과제 검색 (준비 중)", "/gov", content)
 
 
 @app.get("/health")
