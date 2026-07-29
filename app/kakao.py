@@ -33,6 +33,10 @@ def refresh_token() -> str | None:
     return os.environ.get("KAKAO_REFRESH_TOKEN", "").strip() or None
 
 
+def client_secret() -> str | None:
+    return os.environ.get("KAKAO_CLIENT_SECRET", "").strip() or None
+
+
 def authorize_url() -> str:
     return (
         f"{AUTH_HOST}/oauth/authorize?client_id={rest_key()}"
@@ -42,16 +46,15 @@ def authorize_url() -> str:
 
 def exchange_code(code: str) -> dict:
     """인가 코드 → 토큰 교환. {'access_token':…, 'refresh_token':…} 반환."""
-    resp = requests.post(
-        f"{AUTH_HOST}/oauth/token",
-        data={
-            "grant_type": "authorization_code",
-            "client_id": rest_key(),
-            "redirect_uri": CALLBACK_URL,
-            "code": code,
-        },
-        timeout=TIMEOUT,
-    )
+    data = {
+        "grant_type": "authorization_code",
+        "client_id": rest_key(),
+        "redirect_uri": CALLBACK_URL,
+        "code": code,
+    }
+    if client_secret():
+        data["client_secret"] = client_secret()
+    resp = requests.post(f"{AUTH_HOST}/oauth/token", data=data, timeout=TIMEOUT)
     data = resp.json()
     if "access_token" not in data:
         raise KakaoError(f"토큰 교환 실패: {data.get('error_description') or data}")
@@ -62,15 +65,14 @@ def access_token_from_refresh() -> str:
     token = refresh_token()
     if not token:
         raise KakaoError("KAKAO_REFRESH_TOKEN이 설정되지 않았습니다. /kakao 에서 연결하세요.")
-    resp = requests.post(
-        f"{AUTH_HOST}/oauth/token",
-        data={
-            "grant_type": "refresh_token",
-            "client_id": rest_key(),
-            "refresh_token": token,
-        },
-        timeout=TIMEOUT,
-    )
+    data = {
+        "grant_type": "refresh_token",
+        "client_id": rest_key(),
+        "refresh_token": token,
+    }
+    if client_secret():
+        data["client_secret"] = client_secret()
+    resp = requests.post(f"{AUTH_HOST}/oauth/token", data=data, timeout=TIMEOUT)
     data = resp.json()
     if "access_token" not in data:
         raise KakaoError(f"토큰 갱신 실패(재연결 필요): {data.get('error_description') or data}")
