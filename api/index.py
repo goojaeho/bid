@@ -54,6 +54,29 @@ SORT_CHOICES = {
     "amount": "금액 높은순",
 }
 
+MAX_QUERY_GROUPS = 3  # 나라장터 API 호출 수 제한을 위한 OR 그룹 상한
+
+
+def parse_query(q: str) -> list[list[str]]:
+    """검색어 파싱: 쉼표 = OR, 공백 = AND.
+
+    'AI 바우처,콘텐츠' → [['ai', '바우처'], ['콘텐츠']]
+    """
+    groups = []
+    for part in q.split(","):
+        terms = [t.lower() for t in part.split() if t.strip()]
+        if terms:
+            groups.append(terms)
+    return groups[:MAX_QUERY_GROUPS]
+
+
+def query_match(text: str, groups: list[list[str]]) -> bool:
+    """OR 그룹 중 하나라도, 그룹 내 모든 단어가 포함되면 매칭."""
+    if not groups:
+        return True
+    t = (text or "").lower()
+    return any(all(term in t for term in group) for group in groups)
+
 
 def render(params: dict, body: str) -> str:
     cat_options = '<option value="">전체 구분</option>' + "".join(
@@ -72,7 +95,7 @@ def render(params: dict, body: str) -> str:
     max_amt = params["max_amt"] if params["max_amt"] is not None else ""
     form = f"""<form method="get" action="/" class="card">
   <div class="row">
-    <input type="text" name="q" value="{esc(params['q'])}" placeholder="공고명 키워드 (예: 소프트웨어)">
+    <input type="text" name="q" value="{esc(params['q'])}" placeholder="키워드 — 쉼표(,)는 또는, 공백은 그리고 (예: 소프트웨어,홍보)">
     <select name="cat">{cat_options}</select>
     <select name="days">{day_options}</select>
     <button type="submit">검색</button>
@@ -217,25 +240,37 @@ def search(
     categories = [cat] if cat in CATEGORIES else CATEGORIES
 
     client = G2BClient(key)
+    groups = parse_query(q)
+    # OR 그룹별로 가장 긴 단어를 API 검색어로 쓰고, 나머지 조건은 로컬에서 거른다
+    api_terms = [max(g, key=len) for g in groups] or [None]
 
-    def fetch(category: str):
+    def fetch(category: str, term: str | None):
         result = client.fetch_page(
             category, bgn, end, num_of_rows=100,
-            bid_ntce_nm=q or None, timeout=20,
+            bid_ntce_nm=term, timeout=20,
         )
         return category, result
 
     items: list[tuple[str, dict]] = []
+    seen: set[tuple[str, str]] = set()
     total = 0
     errors = []
-    with ThreadPoolExecutor(max_workers=len(categories)) as pool:
-        for future in [pool.submit(fetch, c) for c in categories]:
+    jobs = [(c, t) for c in categories for t in api_terms]
+    with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as pool:
+        for future in [pool.submit(fetch, c, t) for c, t in jobs]:
             try:
                 category, result = future.result()
                 total += result["total_count"]
-                items.extend((category, it) for it in result["items"])
+                for it in result["items"]:
+                    dedup_key = (str(it.get("bidNtceNo")), str(it.get("bidNtceOrd")))
+                    if dedup_key in seen:
+                        continue
+                    seen.add(dedup_key)
+                    if query_match(it.get("bidNtceNm") or "", groups):
+                        items.append((category, it))
             except G2BApiError as e:
-                errors.append(str(e))
+                if str(e) not in errors:
+                    errors.append(str(e))
             except Exception as e:  # 네트워크 오류 등
                 errors.append(f"{type(e).__name__}: {e}")
 
@@ -289,7 +324,7 @@ def _gov_form(params: dict) -> str:
     )
     return f"""<form method="get" action="/gov" class="card">
   <div class="row">
-    <input type="text" name="q" value="{esc(params['q'])}" placeholder="공고명·기관명 키워드 (예: AI, 콘텐츠, 수출)">
+    <input type="text" name="q" value="{esc(params['q'])}" placeholder="키워드 — 쉼표(,)는 또는, 공백은 그리고 (예: AI,콘텐츠)">
     <select name="src">{src_options}</select>
     <select name="region">{region_options}</select>
   </div>
@@ -361,10 +396,10 @@ def gov(
                 errors.append(f"{name}: {type(e).__name__}")
 
     today = datetime.now(KST).date().isoformat()
-    if q:
-        needle = q.strip().lower()
+    groups = parse_query(q)
+    if groups:
         items = [it for it in items
-                 if needle in it["title"].lower() or needle in it["org"].lower()]
+                 if query_match(f'{it["title"]} {it["org"]}', groups)]
     if region:
         items = [it for it in items
                  if region in it["region"] or region in it["title"]]

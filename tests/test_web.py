@@ -73,3 +73,36 @@ class SortTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QueryParseTest(unittest.TestCase):
+    def setUp(self):
+        from api.index import parse_query, query_match
+        self.parse = parse_query
+        self.match = query_match
+
+    def test_or_with_comma(self):
+        groups = self.parse("AI,콘텐츠")
+        self.assertEqual(groups, [["ai"], ["콘텐츠"]])
+        self.assertTrue(self.match("2026 콘텐츠 제작지원", groups))
+        self.assertTrue(self.match("AI 바우처", groups))
+        self.assertFalse(self.match("수출 상담회", groups))
+
+    def test_and_with_space(self):
+        groups = self.parse("AI 바우처")
+        self.assertEqual(groups, [["ai", "바우처"]])
+        self.assertTrue(self.match("2026 AI 바우처 지원", groups))
+        self.assertFalse(self.match("AI 실증사업", groups))
+
+    def test_combined(self):
+        groups = self.parse("AI 바우처, 콘텐츠 제작")
+        self.assertTrue(self.match("콘텐츠 제작지원", groups))
+        self.assertTrue(self.match("AI 바우처", groups))
+        self.assertFalse(self.match("AI 지원사업", groups))
+
+    def test_empty_matches_all(self):
+        self.assertTrue(self.match("아무 공고", self.parse("")))
+
+    def test_group_cap(self):
+        groups = self.parse("a,b,c,d,e")
+        self.assertEqual(len(groups), 3)
