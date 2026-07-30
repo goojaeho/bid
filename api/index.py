@@ -777,4 +777,11 @@ def kakao_test():
 
 @app.get("/health")
 def health():
-    return {"ok": True, "key_set": get_service_key() is not None}
+    return {
+        "ok": True,
+        "key_set": get_service_key() is not None,
+        "login": auth.enabled(),
+        "store": store.enabled(),
+        "ai": summarize.gemini_key() is not None,
+        "kakao": kakao.refresh_token() is not None,
+    }
