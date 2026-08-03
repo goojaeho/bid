@@ -39,7 +39,19 @@ async def strip_vercel_rewrite_prefix(request: Request, call_next):
     # Vercel 리라이트가 경로를 /api/index로 바꿔 전달하는 경우 원래 경로로 복원
     path = request.scope.get("path", "")
     if path == "/api/index" or path.startswith("/api/index/"):
-        request.scope["path"] = path[len("/api/index"):] or "/"
+        path = path[len("/api/index"):] or "/"
+        request.scope["path"] = path
+
+    # 대표 주소(BASE_URL)가 아닌 우리 도메인으로 들어오면 대표 주소로 통일
+    # (쿠키/OAuth 콜백이 한 호스트에서만 동작하도록)
+    host = request.headers.get("host", "").split(":")[0].lower()
+    canonical = auth.base_url().split("//", 1)[-1].split("/")[0].lower()
+    if (host and host != canonical
+            and (host == "oneaigen.com" or host.endswith(".oneaigen.com")
+                 or host.endswith(".vercel.app"))):
+        query = str(request.url.query)
+        target = f"{auth.base_url()}{path}" + (f"?{query}" if query else "")
+        return RedirectResponse(target, status_code=308)
     return await call_next(request)
 
 

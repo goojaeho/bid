@@ -16,8 +16,16 @@ from urllib.parse import urlencode
 
 import requests
 
-CALLBACK_URL = "https://bid.oneaigen.com/auth/callback"
 COOKIE_NAME = "oag_session"
+
+
+def base_url() -> str:
+    """서비스 대표 주소. BASE_URL 환경변수로 전환 (기본: bid.oneaigen.com)."""
+    return os.environ.get("BASE_URL", "https://bid.oneaigen.com").strip().rstrip("/")
+
+
+def callback_url() -> str:
+    return f"{base_url()}/auth/callback"
 SESSION_MAX_AGE = 30 * 86400  # 30일
 TIMEOUT = 15
 
@@ -68,7 +76,7 @@ def read_session(cookie: str | None) -> str | None:
 def login_url() -> str:
     params = {
         "client_id": client_id(),
-        "redirect_uri": CALLBACK_URL,
+        "redirect_uri": callback_url(),
         "response_type": "code",
         "scope": "openid email",
         "prompt": "select_account",
@@ -88,7 +96,7 @@ def handle_callback(code: str) -> str:
             "grant_type": "authorization_code",
             "client_id": client_id(),
             "client_secret": client_secret(),
-            "redirect_uri": CALLBACK_URL,
+            "redirect_uri": callback_url(),
             "code": code,
         },
         timeout=TIMEOUT,
