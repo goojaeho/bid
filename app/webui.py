@@ -287,6 +287,9 @@ BASE = """<!doctype html>
                margin: 14px 4px 4px; }
   .todo-list li.sub-row { padding-left: 26px; background: #fafbfd; }
   .sub-mark { color: #c8cdd8; display: flex; align-items: center; }
+  .sub-input-row input {
+    flex: 1; min-width: 160px; padding: 7px 11px; font-size: 0.88rem;
+  }
 
   .legend { display: flex; gap: 16px; align-items: center; font-size: 0.78rem;
             color: var(--muted); margin-top: 6px; }

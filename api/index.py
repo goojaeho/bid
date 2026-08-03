@@ -641,12 +641,55 @@ document.querySelectorAll(".todo-act[data-due]").forEach(function (btn) {
 });
 document.querySelectorAll(".todo-sub").forEach(function (btn) {
   btn.addEventListener("click", function () {
-    var t = prompt("하위 업무 입력 ('내일까지'처럼 날짜도 인식):");
-    if (t && t.trim()) todoPost("/api/todos", {
-      title: t.trim(),
-      parent_id: parseInt(btn.dataset.id, 10),
-      area: btn.dataset.area,
+    var li = btn.closest("li");
+    var next = li.nextElementSibling;
+    if (next && next.classList.contains("sub-input-row")) {
+      next.querySelector("input").focus();
+      return;
+    }
+    var row = document.createElement("li");
+    row.className = "sub-row sub-input-row";
+    row.innerHTML = '<span class="sub-mark">&#8627;</span>'
+      + '<input type="text" maxlength="200" placeholder="하위 업무 입력 후 Enter — 연속 추가 가능 (날짜 인식: 내일까지 등)">'
+      + '<button type="button" class="todo-act sub-close">닫기</button>';
+    li.after(row);
+    var input = row.querySelector("input");
+    var added = 0;
+    function close() {
+      if (added) location.reload(); else row.remove();
+    }
+    function submit() {
+      var v = input.value.trim();
+      if (!v) { close(); return; }
+      input.disabled = true;
+      fetch("/api/todos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: v,
+          parent_id: parseInt(btn.dataset.id, 10),
+          area: btn.dataset.area,
+        }),
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        input.disabled = false;
+        if (!d.ok) { alert(d.error || "오류가 발생했습니다."); return; }
+        added++;
+        var doneLi = document.createElement("li");
+        doneLi.className = "sub-row";
+        var shownTitle = (d.todo && d.todo.title) || v;
+        var dueNote = (d.todo && d.todo.due_date) ? ' <span class="done-at">' + escHtml(d.todo.due_date) + "</span>" : "";
+        doneLi.innerHTML = '<span class="sub-mark">&#8627;</span><span class="tt">' + escHtml(shownTitle) + "</span>" + dueNote;
+        row.before(doneLi);
+        input.value = "";
+        input.focus();
+      }).catch(function () { input.disabled = false; });
+    }
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); submit(); }
+      if (e.key === "Escape") close();
     });
+    row.querySelector(".sub-close").addEventListener("click", close);
+    input.focus();
   });
 });
 document.querySelectorAll(".todo-edit").forEach(function (btn) {
