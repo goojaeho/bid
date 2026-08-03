@@ -624,10 +624,24 @@ function todoPost(url, body) {
       location.reload();
     });
 }
-document.querySelectorAll(".todo-check").forEach(function (cb) {
-  cb.addEventListener("change", function () {
-    todoPost("/api/todos/" + cb.dataset.id + "/toggle");
-  });
+document.addEventListener("change", function (e) {
+  var cb = e.target.closest(".todo-check");
+  if (!cb || !cb.dataset.id) return;
+  fetch("/api/todos/" + cb.dataset.id + "/toggle", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  }).then(function (r) { return r.json(); }).then(function (d) {
+    if (!d.ok) {
+      alert(d.error || "오류가 발생했습니다.");
+      cb.checked = !cb.checked;
+      return;
+    }
+    var li = cb.closest("li");
+    if (li) li.querySelectorAll(".tt").forEach(function (t) {
+      t.classList.toggle("tdone", cb.checked);
+    });
+  }).catch(function () { cb.checked = !cb.checked; });
 });
 document.querySelectorAll(".todo-del").forEach(function (btn) {
   btn.addEventListener("click", function () {
@@ -678,7 +692,8 @@ document.querySelectorAll(".todo-sub").forEach(function (btn) {
         doneLi.className = "sub-row";
         var shownTitle = (d.todo && d.todo.title) || v;
         var dueNote = (d.todo && d.todo.due_date) ? ' <span class="done-at">' + escHtml(d.todo.due_date) + "</span>" : "";
-        doneLi.innerHTML = '<span class="sub-mark">&#8627;</span><span class="tt">' + escHtml(shownTitle) + "</span>" + dueNote;
+        var cbHtml = (d.todo && d.todo.id) ? '<input type="checkbox" class="todo-check" data-id="' + d.todo.id + '">' : "";
+        doneLi.innerHTML = '<span class="sub-mark">&#8627;</span>' + cbHtml + '<span class="tt">' + escHtml(shownTitle) + "</span>" + dueNote;
         row.before(doneLi);
         input.value = "";
         input.focus();

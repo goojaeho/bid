@@ -249,6 +249,7 @@ BASE = """<!doctype html>
   .todo-list li:last-child { border-bottom: none; }
   .todo-list .tt { flex: 1; word-break: break-word; }
   .todo-list .done-at { color: var(--muted); font-size: 0.76rem; white-space: nowrap; }
+  .todo-list .tt { transition: color 0.15s ease; }
   .todo-list .tdone { color: var(--muted); text-decoration: line-through; }
   .todo-del {
     background: none; border: none; color: #c8cdd8; cursor: pointer;
