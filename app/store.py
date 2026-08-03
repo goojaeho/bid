@@ -24,12 +24,18 @@ class StoreError(Exception):
 
 
 def _supabase_conf() -> tuple[str, str] | None:
-    url = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
+    raw = os.environ.get("SUPABASE_URL", "").strip()
     key = (os.environ.get("SUPABASE_SERVICE_KEY")
            or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
-    if url and key:
-        return url, key
-    return None
+    if not raw or not key:
+        return None
+    # 어떤 형태로 넣어도 동작하도록 스킴+호스트만 사용
+    # (예: .../rest/v1, 끝 슬래시, 대시보드 주소 등 뒤에 붙은 경로 제거)
+    from urllib.parse import urlsplit
+    parts = urlsplit(raw if "://" in raw else f"https://{raw}")
+    if not parts.netloc:
+        return None
+    return f"https://{parts.netloc}", key
 
 
 def _upstash_conf() -> tuple[str, str] | None:
