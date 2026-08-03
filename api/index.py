@@ -27,7 +27,7 @@ from fastapi import Body
 
 from app import auth, gov_sources, kakao, store, summarize, todos
 from app.g2b_client import CATEGORIES, G2BApiError, G2BClient
-from app.webui import layout
+from app.webui import icon, layout
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -144,7 +144,7 @@ def render(params: dict, body: str) -> str:
   <div class="row">
     <span class="quick-label">빠른 검색</span>
     <a class="chip" href="/bid?q={quote(RECOMMEND_BID)}&days=7"
-       title="추천 키워드: {esc(RECOMMEND_BID)}">⭐ {esc(RECOMMEND_BID.replace(",", " · "))}</a>
+       title="추천 키워드: {esc(RECOMMEND_BID)}">{icon("star", 13)} {esc(RECOMMEND_BID.replace(",", " · "))}</a>
   </div>
   <div class="row">
     <input type="text" name="q" value="{esc(params['q'])}" placeholder="키워드 — 쉼표(,)는 또는, 공백은 그리고 (예: 소프트웨어,홍보)">
@@ -396,7 +396,7 @@ def _gov_form(params: dict) -> str:
   <div class="row">
     <span class="quick-label">빠른 검색</span>
     <a class="chip" href="/gov?q={quote(RECOMMEND_GOV)}&state=ing&sort=deadline"
-       title="추천 키워드: {esc(RECOMMEND_GOV)}">⭐ {esc(RECOMMEND_GOV.replace(",", " · "))}</a>
+       title="추천 키워드: {esc(RECOMMEND_GOV)}">{icon("star", 13)} {esc(RECOMMEND_GOV.replace(",", " · "))}</a>
   </div>
   <div class="row">
     <input type="text" name="q" value="{esc(params['q'])}" placeholder="키워드 — 쉼표(,)는 또는, 공백은 그리고 (예: AI,콘텐츠)">
@@ -637,6 +637,16 @@ document.querySelectorAll(".todo-act[data-due]").forEach(function (btn) {
     todoPost("/api/todos/" + btn.dataset.id + "/update", { due_date: btn.dataset.due });
   });
 });
+document.querySelectorAll(".todo-sub").forEach(function (btn) {
+  btn.addEventListener("click", function () {
+    var t = prompt("하위 업무 입력 ('내일까지'처럼 날짜도 인식):");
+    if (t && t.trim()) todoPost("/api/todos", {
+      title: t.trim(),
+      parent_id: parseInt(btn.dataset.id, 10),
+      area: btn.dataset.area,
+    });
+  });
+});
 document.querySelectorAll(".todo-edit").forEach(function (btn) {
   btn.addEventListener("click", function () {
     var t = prompt("할 일 수정:", btn.dataset.title);
@@ -675,10 +685,10 @@ def _pri_dot(p) -> str:
 
 def _area_chip(t: dict) -> str:
     area = t.get("area") if t.get("area") in todos.AREAS else "work"
-    icon = "💼" if area == "work" else "🌱"
+    area_icon = icon("briefcase", 11) if area == "work" else icon("leaf", 11)
     label = todos.AREAS[area]
     cat = (t.get("category") or "").strip()
-    text = f"{icon} {esc(cat)}" if cat else f"{icon} {label}"
+    text = f"{area_icon} {esc(cat)}" if cat else f"{area_icon} {label}"
     return f'<span class="area-chip area-{area}">{text}</span>'
 
 
@@ -693,10 +703,11 @@ def _todo_cal_link(t: dict) -> str:
     url = ("https://calendar.google.com/calendar/render?action=TEMPLATE"
            f"&text={quote('[할일] ' + t['title'])}"
            f"&dates={due.replace('-', '')}/{nd}")
-    return f'<a class="todo-act" href="{esc(url)}" target="_blank" title="구글 캘린더에 추가">📅</a>'
+    return f'<a class="todo-act" href="{esc(url)}" target="_blank" title="구글 캘린더에 추가">{icon("calendar", 13)}</a>'
 
 
-def _todo_row(t: dict, today_iso: str, done: bool = False) -> str:
+def _todo_row(t: dict, today_iso: str, done: bool = False,
+              is_child: bool = False, sub_count: int = 0) -> str:
     today_d = datetime.fromisoformat(today_iso).date()
     tomorrow = (today_d + timedelta(days=1)).isoformat()
     actions = ""
@@ -710,22 +721,61 @@ def _todo_row(t: dict, today_iso: str, done: bool = False) -> str:
             actions += (f'<button type="button" class="todo-act" data-due="{tomorrow}" '
                         f'data-id="{t["id"]}">내일로</button>')
         actions += _todo_cal_link(t)
+        if not is_child and not t.get("parent_id"):
+            area = t.get("area") if t.get("area") in todos.AREAS else "work"
+            actions += (f'<button type="button" class="todo-act todo-sub" '
+                        f'data-id="{t["id"]}" data-area="{area}" '
+                        f'title="하위 업무 추가">{icon("plus", 12)} 하위</button>')
         actions += (f'<button type="button" class="todo-act todo-edit" data-id="{t["id"]}" '
-                    f'data-title="{esc(t["title"])}">✎</button>')
+                    f'data-title="{esc(t["title"])}">{icon("pencil", 12)}</button>')
         actions += (f'<button type="button" class="todo-del" data-id="{t["id"]}" '
-                    f'title="삭제">✕</button>')
+                    f'title="삭제">{icon("x", 14)}</button>')
         badge = d_day_badge(t.get("due_date"), today_d) if t.get("due_date") else ""
     title_cls = "tt tdone" if done else "tt"
     done_at = (f'<span class="done-at">{_fmt_done_at(t.get("done_at"))}</span>'
                if done else "")
+    child_mark = (f'<span class="sub-mark">{icon("corner-down-right", 13)}</span>'
+                  if is_child else "")
+    sub_chip = (f'<span class="area-chip" style="background:#eef0f4;color:#4b5265">'
+                f'하위 {sub_count}</span>' if sub_count else "")
+    li_cls = ' class="sub-row"' if is_child else ""
     return (
-        f'<li><input type="checkbox" class="todo-check" data-id="{t["id"]}"'
+        f'<li{li_cls}>{child_mark}<input type="checkbox" class="todo-check" data-id="{t["id"]}"'
         f'{" checked" if done else ""}>'
         f'{_pri_dot(t.get("priority"))}'
         f'<span class="{title_cls}">{esc(t["title"])}</span>'
-        f"{_area_chip(t)}{badge}{done_at}"
+        f"{_area_chip(t)}{sub_chip}{badge}{done_at}"
         f'<span style="display:flex;gap:4px;flex-shrink:0">{actions}</span></li>'
     )
+
+
+def _todo_tree_rows(items: list[dict], all_pending: list[dict], today_iso: str) -> str:
+    """뷰에 해당하는 항목들을 상위-하위 트리로 렌더링.
+
+    - 상위 항목 아래에 (뷰와 무관하게) 미완료 하위 업무를 함께 표시
+    - 상위가 뷰에 없는 하위 항목은 ↳ 표시와 함께 단독 렌더링
+    """
+    children_map: dict[int, list[dict]] = {}
+    for t in all_pending:
+        pid = t.get("parent_id")
+        if pid:
+            children_map.setdefault(pid, []).append(t)
+
+    shown_child_ids = set()
+    rows = []
+    for t in items:
+        if t.get("parent_id"):
+            continue  # 하위는 상위 아래에서 처리
+        children = children_map.get(t["id"], [])
+        rows.append(_todo_row(t, today_iso, sub_count=len(children)))
+        for c in children:
+            rows.append(_todo_row(c, today_iso, is_child=True))
+            shown_child_ids.add(c["id"])
+    # 상위가 이 뷰에 없는 하위 항목은 단독 표시
+    for t in items:
+        if t.get("parent_id") and t["id"] not in shown_child_ids:
+            rows.append(_todo_row(t, today_iso, is_child=True))
+    return "".join(rows)
 
 
 def _home_content(data: dict, st: dict) -> str:
@@ -733,9 +783,9 @@ def _home_content(data: dict, st: dict) -> str:
     today_iso = datetime.now(KST).date().isoformat()
     tiles = "".join([
         f'<div class="stat-tile"><div class="num">{st["today"]:,}</div>'
-        f'<div class="lbl">오늘 완료 · 💼{st["today_work"]} 🌱{st["today_personal"]}</div></div>',
+        f'<div class="lbl">오늘 완료 · 업무 {st["today_work"]} · 개인 {st["today_personal"]}</div></div>',
         f'<div class="stat-tile"><div class="num">{st["week"]:,}</div>'
-        f'<div class="lbl">이번 주 완료 · 💼{st["week_work"]} 🌱{st["week_personal"]}</div></div>',
+        f'<div class="lbl">이번 주 완료 · 업무 {st["week_work"]} · 개인 {st["week_personal"]}</div></div>',
         f'<div class="stat-tile"><div class="num">{st["month"]:,}</div>'
         f'<div class="lbl">이번 달 완료</div></div>',
         f'<div class="stat-tile"><div class="num">{st["pending"]:,}</div>'
@@ -775,7 +825,7 @@ def _home_content(data: dict, st: dict) -> str:
 
     today_items = [t for t in data["pending"]
                    if t.get("due_date") and t["due_date"] <= today_iso]
-    rows = "".join(_todo_row(t, today_iso) for t in today_items[:8]) or \
+    rows = "".join(_todo_row(t, today_iso, is_child=bool(t.get("parent_id"))) for t in today_items[:8]) or \
         '<li><span class="meta">오늘 마감인 할 일이 없습니다.</span></li>'
     today_card = f"""<div class="card">
   <div class="row" style="justify-content:space-between">
@@ -799,7 +849,7 @@ def home(request: Request):
     if not auth.is_admin(user):
         return RedirectResponse("/bid", status_code=302)
     if not todos.enabled():
-        return layout("메인", "🏠 내 작업 공간", "/",
+        return layout("메인", icon("house", 20) + " 내 작업 공간", "/",
             '<div class="card"><p class="error">Supabase가 설정되지 않았습니다. '
             "SUPABASE_URL / SUPABASE_SERVICE_KEY 환경변수를 확인하세요.</p></div>",
             user=user, admin=True)
@@ -810,7 +860,7 @@ def home(request: Request):
     except store.StoreError as e:
         content = (f'<div class="card"><p class="error">{esc(str(e))}</p>'
                    '<p class="meta">Supabase SQL Editor에서 todos 테이블을 만들었는지 확인하세요.</p></div>')
-    return layout("메인", "🏠 내 작업 공간", "/", content, user=user, admin=True)
+    return layout("메인", icon("house", 20) + " 내 작업 공간", "/", content, user=user, admin=True)
 
 
 def _admin_user(request: Request) -> str | None:
@@ -819,7 +869,7 @@ def _admin_user(request: Request) -> str | None:
 
 
 TODO_VIEWS = {"today": "오늘", "upcoming": "예정", "all": "전체", "done": "완료"}
-TODO_AREA_TABS = {"": "전체", "work": "💼 업무", "personal": "🌱 개인"}
+TODO_AREA_TABS = {"": "전체", "work": icon("briefcase", 13) + " 업무", "personal": icon("leaf", 13) + " 개인"}
 
 
 def _seg(base: str, options: dict, current: str, keep: dict) -> str:
@@ -844,13 +894,13 @@ def todo_page(request: Request, area: str = Query(""), view: str = Query("today"
     today_iso = datetime.now(KST).date().isoformat()
 
     if not todos.enabled():
-        return layout("할 일", "✅ 할 일", "/todo",
+        return layout("할 일", icon("list-checks", 20) + " 할 일", "/todo",
             '<div class="card"><p class="error">Supabase가 설정되지 않았습니다.</p></div>',
             user=user, admin=True)
     try:
         data = todos.list_todos(user)
     except store.StoreError as e:
-        return layout("할 일", "✅ 할 일", "/todo",
+        return layout("할 일", icon("list-checks", 20) + " 할 일", "/todo",
             f'<div class="card"><p class="error">{esc(str(e))}</p>'
             '<p class="meta">Supabase에서 todos 테이블 확장 쿼리를 실행했는지 확인하세요.</p></div>',
             user=user, admin=True)
@@ -875,24 +925,24 @@ def todo_page(request: Request, area: str = Query(""), view: str = Query("today"
   </div>
   <div class="row">
     <select id="t-area">
-      <option value="work"{" selected" if default_area == "work" else ""}>💼 업무</option>
-      <option value="personal"{" selected" if default_area == "personal" else ""}>🌱 개인</option>
+      <option value="work"{" selected" if default_area == "work" else ""}>업무</option>
+      <option value="personal"{" selected" if default_area == "personal" else ""}>개인</option>
     </select>
     <input type="text" id="t-cat" placeholder="카테고리 (예: 제안서, 운동)" style="flex:0 1 180px;min-width:130px">
     <input type="date" id="t-due" title="마감일">
     <select id="t-pri">
-      <option value="1">🔴 높음</option>
-      <option value="2" selected>🟡 보통</option>
-      <option value="3">⚪ 낮음</option>
+      <option value="1">우선순위 높음</option>
+      <option value="2" selected>우선순위 보통</option>
+      <option value="3">우선순위 낮음</option>
     </select>
     <label style="display:flex;align-items:center;gap:6px;font-size:0.84rem;color:var(--muted)">
-      <input type="checkbox" id="t-cal" style="width:16px;height:16px;accent-color:var(--accent)">📅 캘린더에도 추가
+      <input type="checkbox" id="t-cal" style="width:16px;height:16px;accent-color:var(--accent)">{icon("calendar", 14)} 캘린더에도 추가
     </label>
   </div>
 </form>"""
 
     if view == "today":
-        rows = "".join(_todo_row(t, today_iso) for t in today_items) or \
+        rows = _todo_tree_rows(today_items, pending, today_iso) or \
             '<li><span class="meta">오늘 마감인 할 일이 없습니다. 🎉</span></li>'
         body = f'<div class="card"><ul class="todo-list">{rows}</ul></div>'
     elif view == "upcoming":
@@ -903,7 +953,7 @@ def todo_page(request: Request, area: str = Query(""), view: str = Query("today"
                 current_due = t["due_date"]
                 d = datetime.fromisoformat(current_due).date()
                 groups.append(f'</ul><p class="due-group">{d.month}/{d.day} ({["월","화","수","목","금","토","일"][d.weekday()]})</p><ul class="todo-list">')
-            groups.append(_todo_row(t, today_iso))
+            groups.append(_todo_row(t, today_iso, is_child=bool(t.get("parent_id"))))
         inner = "".join(groups)[5:] if groups else '<span class="meta">예정된 할 일이 없습니다.</span>'
         body = f'<div class="card">{inner}</ul></div>'
     elif view == "done":
@@ -911,13 +961,13 @@ def todo_page(request: Request, area: str = Query(""), view: str = Query("today"
             '<li><span class="meta">완료한 할 일이 없습니다.</span></li>'
         body = f'<div class="card"><ul class="todo-list">{rows}</ul></div>'
     else:  # all
-        rows = "".join(_todo_row(t, today_iso) for t in pending) or \
+        rows = _todo_tree_rows(pending, pending, today_iso) or \
             '<li><span class="meta">할 일이 없습니다. 위에서 추가해보세요!</span></li>'
         body = f'<div class="card"><ul class="todo-list">{rows}</ul></div>'
 
     content = (f'<div class="row" style="margin-bottom:12px;justify-content:space-between">'
                f"{area_seg}{view_seg}</div>{form}{body}{TODO_JS}")
-    return layout("할 일 관리", "✅ 할 일", "/todo", content, user=user, admin=True)
+    return layout("할 일 관리", icon("list-checks", 20) + " 할 일", "/todo", content, user=user, admin=True)
 
 
 @app.post("/api/todos")
@@ -933,6 +983,7 @@ def api_todo_add(request: Request, body: dict = Body(...)):
             category=str(body.get("category", "")),
             due_date=str(body.get("due")) if body.get("due") else None,
             priority=body.get("priority") if isinstance(body.get("priority"), int) else 2,
+            parent_id=body.get("parent_id") if isinstance(body.get("parent_id"), int) else None,
         )
         return {"ok": True, "todo": created}
     except store.StoreError as e:
@@ -1047,7 +1098,7 @@ window.renderFavs = function () {
       + '<td class="nowrap">' + escHtml(it.o || "") + "</td>"
       + '<td class="date">' + escHtml(it.e || "-") + "</td>"
       + '<td class="nowrap">'
-      + (cal ? '<a class="btn-outline" style="padding:4px 10px;font-size:0.8rem" href="' + escHtml(cal) + '" target="_blank">📅</a> ' : "")
+      + (cal ? '<a class="btn-outline" style="padding:4px 10px;font-size:0.8rem" href="' + escHtml(cal) + '" target="_blank">캘린더</a> ' : "")
       + '<button type="button" class="btn-outline fav-del" style="padding:4px 10px;font-size:0.8rem" data-u="' + escHtml(it.u) + '">삭제</button>'
       + "</td></tr>";
   }).join("");
@@ -1063,7 +1114,7 @@ window.renderFavs = function () {
 };
 document.addEventListener("DOMContentLoaded", window.renderFavs);
 </script>"""
-    return layout("즐겨찾기", "⭐ 즐겨찾기", "/favs", content, user=user_of(request),
+    return layout("즐겨찾기", icon("star", 20) + " 즐겨찾기", "/favs", content, user=user_of(request),
                   admin=auth.is_admin(user_of(request)))
 
 
@@ -1111,7 +1162,7 @@ def summarize_endpoint(request: Request, u: str = Query("", max_length=500)):
 @app.get("/kakao", response_class=HTMLResponse)
 def kakao_page():
     connected = kakao.refresh_token() is not None
-    status = ("✅ 카카오 계정이 연결되어 있습니다." if connected
+    status = ("카카오 계정이 연결되어 있습니다. ✔" if connected
               else "아직 연결되지 않았습니다.")
     keywords = ", ".join(_notify_keywords()) or "(미설정 — NOTIFY_KEYWORDS 환경변수)"
     content = f"""<div class="card">
@@ -1144,7 +1195,7 @@ def kakao_callback(code: str = Query("")):
                       f'<div class="card"><p class="error">{esc(str(e))}</p></div>')
     refresh = tokens.get("refresh_token", "")
     content = f"""<div class="card">
-  <p style="margin:4px 0"><b>✅ 연결 성공!</b> {sent_note}</p>
+  <p style="margin:4px 0"><b>연결 성공!</b> {sent_note}</p>
   <p style="margin:14px 0 6px">마지막 단계 — 아래 토큰을 Vercel 환경변수에 추가하세요:</p>
   <p class="meta">이름: <b>KAKAO_REFRESH_TOKEN</b></p>
   <p style="word-break:break-all;background:#f5f6f8;border-radius:8px;padding:12px;font-size:0.85rem">{esc(refresh)}</p>
@@ -1157,7 +1208,7 @@ def kakao_callback(code: str = Query("")):
 def kakao_test():
     try:
         kakao.send_memo("[OneAIGen] 테스트 메시지입니다. 알림 연동이 정상 작동 중입니다.")
-        msg = '<p style="margin:4px 0">✅ 테스트 메시지를 보냈습니다. 카카오톡을 확인하세요.</p>'
+        msg = '<p style="margin:4px 0">테스트 메시지를 보냈습니다. 카카오톡을 확인하세요.</p>'
     except kakao.KakaoError as e:
         msg = f'<p class="error">{esc(str(e))}</p>'
     return layout("카카오 테스트", "카카오톡 알림", "/kakao", f'<div class="card">{msg}</div>')

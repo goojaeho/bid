@@ -110,7 +110,7 @@ class RoutingTest(unittest.TestCase):
             r = self.client.get("/", cookies=self.admin_cookie)
         self.assertEqual(r.status_code, 200)
         for needle in ["오늘 완료", "최근 14일", "오늘 할 일", "할 일 관리 →",
-                       "bar-seg work", "legend", "✅ 할 일"]:
+                       "bar-seg work", "legend", "list-checks" if False else "할 일"]:
             self.assertIn(needle, r.text)
         # 대시보드에는 입력 폼이 없어야 함
         self.assertNotIn('id="t-title"', r.text)
@@ -120,8 +120,8 @@ class RoutingTest(unittest.TestCase):
              patch.object(todos, "list_todos", return_value=self.sample):
             r = self.client.get("/todo", cookies=self.admin_cookie)
             self.assertEqual(r.status_code, 200)
-            for needle in ["todo-form", "💼 업무", "🌱 개인", "제안서 작성",
-                           "캘린더에도 추가", "마감일 자동 인식"]:
+            for needle in ["todo-form", "업무", "개인", "제안서 작성",
+                           "캘린더에도 추가", "마감일 자동 인식", "todo-sub"]:
                 self.assertIn(needle, r.text)
             # 영역 필터: personal만
             r2 = self.client.get("/todo?area=personal&view=all",
@@ -134,7 +134,7 @@ class RoutingTest(unittest.TestCase):
         self.assertFalse(r.json()["ok"])
         captured = {}
         def fake_add(email, title, area="work", category="", due_date=None,
-                     priority=2, parse_date=True):
+                     priority=2, parent_id=None, parse_date=True):
             captured.update(dict(email=email, title=title, area=area,
                                  category=category, due_date=due_date,
                                  priority=priority))
@@ -147,6 +147,18 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual(captured["area"], "personal")
         self.assertEqual(captured["due_date"], "2026-08-01")
         self.assertEqual(captured["priority"], 1)
+
+    def test_todo_api_subtask(self):
+        captured = {}
+        def fake_add(email, title, area="work", category="", due_date=None,
+                     priority=2, parent_id=None, parse_date=True):
+            captured.update(dict(title=title, parent_id=parent_id, area=area))
+            return {"id": 10, "title": title}
+        with patch.object(todos, "add_todo", side_effect=fake_add):
+            r = self.client.post("/api/todos", cookies=self.admin_cookie, json={
+                "title": "자료 조사", "parent_id": 1, "area": "work"})
+        self.assertTrue(r.json()["ok"])
+        self.assertEqual(captured["parent_id"], 1)
 
     def test_todo_api_update(self):
         captured = {}

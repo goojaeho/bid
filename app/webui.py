@@ -7,11 +7,37 @@ from __future__ import annotations
 
 import os
 
-PERSONAL_NAV = [("/", "🏠 메인"), ("/todo", "✅ 할 일")]
+# Lucide 아이콘 (https://lucide.dev, ISC 라이선스) — 인라인 SVG
+ICONS = {
+    "house": '<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" /><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />',
+    "list-checks": '<path d="m3 17 2 2 4-4" /><path d="m3 7 2 2 4-4" /><path d="M13 6h8" /><path d="M13 12h8" /><path d="M13 18h8" />',
+    "gavel": '<path d="m14.5 12.5-8 8a2.119 2.119 0 1 1-3-3l8-8" /><path d="m16 16 6-6" /><path d="m8 8 6-6" /><path d="m9 7 8 8" /><path d="m21 11-8-8" />',
+    "landmark": '<path d="M10 18v-7" /><path d="M11.12 2.198a2 2 0 0 1 1.76.006l7.866 3.847c.476.233.31.949-.22.949H3.474c-.53 0-.695-.716-.22-.949z" /><path d="M14 18v-7" /><path d="M18 18v-7" /><path d="M3 22h18" /><path d="M6 18v-7" />',
+    "star": '<path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z" />',
+    "bell": '<path d="M10.268 21a2 2 0 0 0 3.464 0" /><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" />',
+    "briefcase": '<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" /><rect width="20" height="14" x="2" y="6" rx="2" />',
+    "leaf": '<path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z" /><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12" />',
+    "calendar": '<path d="M8 2v4" /><path d="M16 2v4" /><rect width="18" height="18" x="3" y="4" rx="2" /><path d="M3 10h18" />',
+    "pencil": '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /><path d="m15 5 4 4" />',
+    "x": '<path d="M18 6 6 18" /><path d="m6 6 12 12" />',
+    "plus": '<path d="M5 12h14" /><path d="M12 5v14" />',
+    "corner-down-right": '<path d="m15 10 5 5-5 5" /><path d="M4 4v7a4 4 0 0 0 4 4h12" />',
+    "log-out": '<path d="m16 17 5-5-5-5" /><path d="M21 12H9" /><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />',
+}
+
+
+def icon(name: str, size: int = 16) -> str:
+    inner = ICONS.get(name, "")
+    return (f'<svg class="ic" width="{size}" height="{size}" viewBox="0 0 24 24" '
+            f'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+            f'stroke-linejoin="round" aria-hidden="true">{inner}</svg>')
+
+
+PERSONAL_NAV = [("/", "메인", "house"), ("/todo", "할 일", "list-checks")]
 PUBLIC_NAV = [
-    ("/bid", "입찰공고"),
-    ("/gov", "정부과제"),
-    ("/favs", "⭐ 즐겨찾기"),
+    ("/bid", "입찰공고", "gavel"),
+    ("/gov", "정부과제", "landmark"),
+    ("/favs", "즐겨찾기", "star"),
 ]
 
 BASE = """<!doctype html>
@@ -53,9 +79,12 @@ BASE = """<!doctype html>
   .brand b { color: var(--accent); }
   nav { display: flex; flex-direction: column; gap: 2px; }
   nav a {
-    display: block; padding: 9px 12px; border-radius: 8px;
+    display: flex; align-items: center; gap: 9px;
+    padding: 9px 12px; border-radius: 8px;
     color: var(--muted); font-weight: 600; font-size: 0.92rem;
   }
+  .ic { vertical-align: -2px; flex-shrink: 0; }
+  h1 .ic { vertical-align: -3px; margin-right: 4px; }
   nav a:hover { color: var(--text); background: #f4f5f8; text-decoration: none; }
   nav a.active { color: var(--accent); background: #eef2ff; }
   .side-foot {
@@ -256,6 +285,8 @@ BASE = """<!doctype html>
   .todo-act:hover { background: #f4f5f8; color: var(--text); }
   .due-group { color: var(--muted); font-size: 0.8rem; font-weight: 700;
                margin: 14px 4px 4px; }
+  .todo-list li.sub-row { padding-left: 26px; background: #fafbfd; }
+  .sub-mark { color: #c8cdd8; display: flex; align-items: center; }
 
   .legend { display: flex; gap: 16px; align-items: center; font-size: 0.78rem;
             color: var(--muted); margin-top: 6px; }
@@ -288,7 +319,7 @@ BASE = """<!doctype html>
 <aside class="sidebar">
   <span class="brand">One<b>AI</b>Gen</span>
   <nav>__NAV__</nav>
-  <div class="side-foot">__USER__<a href="/kakao">🔔 카카오 알림</a></div>
+  <div class="side-foot">__USER__<a href="/kakao">__BELL__ 카카오 알림</a></div>
 </aside>
 <div class="content">
 <main>
@@ -475,13 +506,14 @@ def layout(title: str, heading: str, active_path: str, content: str,
     from app import store
     items = (PERSONAL_NAV if admin else []) + PUBLIC_NAV
     parts = []
-    for path, label in items:
+    for path, label, icon_name in items:
         cls = ' class="active"' if path == active_path else ""
-        parts.append(f'<a href="{path}"{cls}>{label}</a>')
+        parts.append(f'<a href="{path}"{cls}>{icon(icon_name)}<span>{label}</span></a>')
     nav = "".join(parts)
     userbox = ""
     if user:
-        userbox = f'<span>{user}</span><br><a href="/logout">로그아웃</a><br>'
+        userbox = (f'<span>{user}</span><br>'
+                   f'<a href="/logout">{icon("log-out", 12)} 로그아웃</a><br>')
     ai = "1" if os.environ.get("GEMINI_API_KEY", "").strip() else "0"
     sf = "1" if (user and store.enabled()) else "0"
     return (
@@ -490,6 +522,7 @@ def layout(title: str, heading: str, active_path: str, content: str,
         .replace("__HEADING__", heading)
         .replace("__CONTENT__", content)
         .replace("__USER__", userbox)
+        .replace("__BELL__", icon("bell", 12))
         .replace("__AI__", ai)
         .replace("__SF__", sf)
     )

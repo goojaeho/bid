@@ -13,6 +13,7 @@
   alter table todos add column if not exists category text not null default '';
   alter table todos add column if not exists due_date date;
   alter table todos add column if not exists priority int not null default 2;
+  alter table todos add column if not exists parent_id bigint;
   create index if not exists todos_email_idx on todos (email, done, due_date);
 
 area: 'work'(업무) | 'personal'(개인)
@@ -36,7 +37,7 @@ MAX_TITLE = 200
 AREAS = {"work": "업무", "personal": "개인"}
 PRIORITIES = {1: "높음", 2: "보통", 3: "낮음"}
 
-FIELDS = "id,title,area,category,due_date,priority,created_at"
+FIELDS = "id,title,area,category,due_date,priority,parent_id,created_at"
 
 
 def enabled() -> bool:
@@ -127,7 +128,7 @@ def list_todos(email: str) -> dict:
 
 def add_todo(email: str, title: str, area: str = "work", category: str = "",
              due_date: str | None = None, priority: int = 2,
-             parse_date: bool = True) -> dict:
+             parent_id: int | None = None, parse_date: bool = True) -> dict:
     title = (title or "").strip()[:MAX_TITLE]
     if not title:
         raise StoreError("할 일 내용이 비어 있습니다.")
@@ -142,6 +143,7 @@ def add_todo(email: str, title: str, area: str = "work", category: str = "",
         "category": (category or "").strip()[:50],
         "due_date": due_date or None,
         "priority": priority if priority in PRIORITIES else 2,
+        "parent_id": parent_id,
     }
     resp = _request("POST", "todos", json=row,
                     headers={"Prefer": "return=representation"})
