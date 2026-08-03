@@ -79,3 +79,20 @@ def run() -> None:
                 logger.info("마이그레이션 v%d 적용", version)
     except Exception as e:  # 마이그레이션 실패가 서비스 전체를 막으면 안 됨
         logger.error("자동 마이그레이션 실패: %s", e)
+
+
+def applied_version() -> int | None:
+    """적용된 최신 마이그레이션 버전 (DATABASE_URL 미설정/오류 시 None)."""
+    url = database_url()
+    if not url:
+        return None
+    try:
+        import psycopg
+
+        with psycopg.connect(url, autocommit=True, connect_timeout=5) as conn:
+            row = conn.execute(
+                "select coalesce(max(version), 0) from schema_migrations"
+            ).fetchone()
+            return row[0] if row else 0
+    except Exception:
+        return None

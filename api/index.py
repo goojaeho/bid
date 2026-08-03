@@ -1225,4 +1225,5 @@ def health():
         "store": store.enabled(),
         "ai": summarize.gemini_key() is not None,
         "kakao": kakao.refresh_token() is not None,
+        "db_version": migrations.applied_version(),
     }
