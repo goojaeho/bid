@@ -343,8 +343,13 @@ def search(
             except G2BApiError as e:
                 if str(e) not in errors:
                     errors.append(str(e))
-            except Exception as e:  # 네트워크 오류 등
-                errors.append(f"{type(e).__name__}: {e}")
+            except Exception as e:  # 네트워크 오류 등 — 같은 유형은 한 번만 표시
+                if "Timeout" in type(e).__name__:
+                    msg = "나라장터 API 응답이 지연되고 있습니다. 잠시 후 다시 검색해주세요."
+                else:
+                    msg = f"{type(e).__name__}: {e}"
+                if msg not in errors:
+                    errors.append(msg)
 
     fetched = len(items)
     items = apply_filters(items, org.strip(), min_amt, max_amt)

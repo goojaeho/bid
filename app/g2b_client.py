@@ -11,7 +11,7 @@ from typing import Iterator
 
 import requests
 
-BASE_URL = "http://apis.data.go.kr/1230000/ad/BidPublicInfoService"
+BASE_URL = "https://apis.data.go.kr/1230000/ad/BidPublicInfoService"
 
 # 업무구분 → 오퍼레이션 (PPSSrch: 나라장터 검색조건 조회)
 OPERATIONS = {
@@ -69,10 +69,17 @@ class G2BClient:
             params["bidNtceNm"] = bid_ntce_nm
 
         url = f"{BASE_URL}/{OPERATIONS[category]}"
-        resp = self.session.get(url, params=params, timeout=timeout)
-        if resp.status_code == 401:
+        resp = None
+        for attempt in (1, 2):  # 일시 지연 대비 1회 재시도
+            try:
+                resp = self.session.get(url, params=params, timeout=timeout)
+                break
+            except requests.Timeout:
+                if attempt == 2:
+                    raise
+        if resp.status_code in (401, 403):
             raise G2BApiError(
-                "인증 실패(401). G2B_SERVICE_KEY를 확인하세요. "
+                f"인증 실패({resp.status_code}). G2B_SERVICE_KEY를 확인하세요. "
                 "발급 직후라면 키 반영까지 최대 1시간 걸릴 수 있습니다."
             )
         resp.raise_for_status()
