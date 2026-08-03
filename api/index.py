@@ -611,77 +611,180 @@ def _fmt_done_at(raw: str | None) -> str:
         return ""
 
 
-def _home_content(data: dict, st: dict) -> str:
-    tiles = "".join(
-        f'<div class="stat-tile"><div class="num">{st[k]:,}</div>'
-        f'<div class="lbl">{lbl}</div></div>'
-        for k, lbl in [("today", "오늘 완료"), ("week", "이번 주 완료"),
-                       ("month", "이번 달 완료"), ("pending", "대기 중")]
+TODO_JS = """<script>
+function todoPost(url, body) {
+  return fetch(url, { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}) })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.ok) { alert(d.error || "오류가 발생했습니다."); return; }
+      location.reload();
+    });
+}
+document.querySelectorAll(".todo-check").forEach(function (cb) {
+  cb.addEventListener("change", function () {
+    todoPost("/api/todos/" + cb.dataset.id + "/toggle");
+  });
+});
+document.querySelectorAll(".todo-del").forEach(function (btn) {
+  btn.addEventListener("click", function () {
+    if (confirm("삭제할까요?")) todoPost("/api/todos/" + btn.dataset.id + "/delete");
+  });
+});
+document.querySelectorAll(".todo-act[data-due]").forEach(function (btn) {
+  btn.addEventListener("click", function () {
+    todoPost("/api/todos/" + btn.dataset.id + "/update", { due_date: btn.dataset.due });
+  });
+});
+document.querySelectorAll(".todo-edit").forEach(function (btn) {
+  btn.addEventListener("click", function () {
+    var t = prompt("할 일 수정:", btn.dataset.title);
+    if (t && t.trim()) todoPost("/api/todos/" + btn.dataset.id + "/update", { title: t.trim() });
+  });
+});
+var form = document.getElementById("todo-form");
+if (form) form.addEventListener("submit", function (e) {
+  e.preventDefault();
+  var title = document.getElementById("t-title").value.trim();
+  if (!title) return;
+  var due = document.getElementById("t-due").value;
+  var cal = document.getElementById("t-cal").checked;
+  if (cal && due) {
+    var nd = new Date(due); nd.setDate(nd.getDate() + 1);
+    var d2 = nd.toISOString().slice(0, 10).replace(/-/g, "");
+    window.open("https://calendar.google.com/calendar/render?action=TEMPLATE"
+      + "&text=" + encodeURIComponent("[할일] " + title)
+      + "&dates=" + due.replace(/-/g, "") + "/" + d2, "_blank");
+  }
+  todoPost("/api/todos", {
+    title: title,
+    due: due,
+    priority: parseInt(document.getElementById("t-pri").value, 10),
+    category: document.getElementById("t-cat").value.trim(),
+    area: document.getElementById("t-area").value,
+  });
+});
+</script>"""
+
+
+def _pri_dot(p) -> str:
+    p = p if p in (1, 2, 3) else 2
+    return f'<span class="pri pri-{p}" title="우선순위 {todos.PRIORITIES[p]}"></span>'
+
+
+def _area_chip(t: dict) -> str:
+    area = t.get("area") if t.get("area") in todos.AREAS else "work"
+    icon = "💼" if area == "work" else "🌱"
+    label = todos.AREAS[area]
+    cat = (t.get("category") or "").strip()
+    text = f"{icon} {esc(cat)}" if cat else f"{icon} {label}"
+    return f'<span class="area-chip area-{area}">{text}</span>'
+
+
+def _todo_cal_link(t: dict) -> str:
+    due = t.get("due_date")
+    if not due:
+        return ""
+    try:
+        nd = (datetime.fromisoformat(due).date() + timedelta(days=1)).strftime("%Y%m%d")
+    except ValueError:
+        return ""
+    url = ("https://calendar.google.com/calendar/render?action=TEMPLATE"
+           f"&text={quote('[할일] ' + t['title'])}"
+           f"&dates={due.replace('-', '')}/{nd}")
+    return f'<a class="todo-act" href="{esc(url)}" target="_blank" title="구글 캘린더에 추가">📅</a>'
+
+
+def _todo_row(t: dict, today_iso: str, done: bool = False) -> str:
+    today_d = datetime.fromisoformat(today_iso).date()
+    tomorrow = (today_d + timedelta(days=1)).isoformat()
+    actions = ""
+    badge = ""
+    if not done:
+        due = t.get("due_date")
+        if due != today_iso:
+            actions += (f'<button type="button" class="todo-act" data-due="{today_iso}" '
+                        f'data-id="{t["id"]}">오늘</button>')
+        if due != tomorrow:
+            actions += (f'<button type="button" class="todo-act" data-due="{tomorrow}" '
+                        f'data-id="{t["id"]}">내일로</button>')
+        actions += _todo_cal_link(t)
+        actions += (f'<button type="button" class="todo-act todo-edit" data-id="{t["id"]}" '
+                    f'data-title="{esc(t["title"])}">✎</button>')
+        actions += (f'<button type="button" class="todo-del" data-id="{t["id"]}" '
+                    f'title="삭제">✕</button>')
+        badge = d_day_badge(t.get("due_date"), today_d) if t.get("due_date") else ""
+    title_cls = "tt tdone" if done else "tt"
+    done_at = (f'<span class="done-at">{_fmt_done_at(t.get("done_at"))}</span>'
+               if done else "")
+    return (
+        f'<li><input type="checkbox" class="todo-check" data-id="{t["id"]}"'
+        f'{" checked" if done else ""}>'
+        f'{_pri_dot(t.get("priority"))}'
+        f'<span class="{title_cls}">{esc(t["title"])}</span>'
+        f"{_area_chip(t)}{badge}{done_at}"
+        f'<span style="display:flex;gap:4px;flex-shrink:0">{actions}</span></li>'
     )
-    max_count = max([d["count"] for d in st["daily"]] + [1])
-    today_label = st["daily"][-1]["date"]
-    bars = []
+
+
+def _home_content(data: dict, st: dict) -> str:
+    """메인 대시보드: 통계 타일 + 업무/개인 누적 차트 + 오늘 할 일 요약."""
+    today_iso = datetime.now(KST).date().isoformat()
+    tiles = "".join([
+        f'<div class="stat-tile"><div class="num">{st["today"]:,}</div>'
+        f'<div class="lbl">오늘 완료 · 💼{st["today_work"]} 🌱{st["today_personal"]}</div></div>',
+        f'<div class="stat-tile"><div class="num">{st["week"]:,}</div>'
+        f'<div class="lbl">이번 주 완료 · 💼{st["week_work"]} 🌱{st["week_personal"]}</div></div>',
+        f'<div class="stat-tile"><div class="num">{st["month"]:,}</div>'
+        f'<div class="lbl">이번 달 완료</div></div>',
+        f'<div class="stat-tile"><div class="num">{st["pending"]:,}</div>'
+        f'<div class="lbl">대기 중</div></div>',
+    ])
+
+    max_total = max([d["work"] + d["personal"] for d in st["daily"]] + [1])
+    cols = []
     for i, d in enumerate(st["daily"]):
-        height = max(int(d["count"] / max_count * 100), 2)
-        cls = "bar today" if d["date"] == today_label else ("bar" if d["count"] else "bar zero")
+        hw = int(d["work"] / max_total * 100)
+        hp = int(d["personal"] / max_total * 100)
+        segs = ""
+        if hp:
+            segs += f'<div class="bar-seg personal" style="height:{max(hp,2)}%"></div>'
+        if hw and hp:
+            segs += '<div class="bar-gap"></div>'
+        if hw:
+            cls = "bar-seg work" + ("" if hp else " first")
+            segs += f'<div class="{cls}" style="height:{max(hw,2)}%"></div>'
+        if not segs:
+            segs = '<div class="bar zero" style="height:2%"></div>'
         label = d["label"] if (i % 2 == 1 or i == len(st["daily"]) - 1) else ""
-        bars.append(
-            f'<div class="bar-col" title="{d["label"]} · {d["count"]}건 완료">'
-            f'<div class="{cls}" style="height:{height}%"></div>'
+        cols.append(
+            f'<div class="bar-col" title="{d["label"]} · 업무 {d["work"]} · 개인 {d["personal"]}">'
+            f'<div style="display:flex;flex-direction:column;justify-content:flex-end;'
+            f'width:100%;max-width:26px;height:100%">{segs}</div>'
             f'<span class="bar-lbl">{label}</span></div>'
         )
-    chart = (f'<div class="card"><b style="font-size:0.92rem">최근 14일 완료 추이</b>'
-             f'<div class="bars">{"".join(bars)}</div></div>')
-
-    pending_lis = "".join(
-        f'<li><input type="checkbox" class="todo-check" data-id="{t["id"]}">'
-        f'<span class="tt">{esc(t["title"])}</span>'
-        f'<button type="button" class="todo-del" data-id="{t["id"]}" title="삭제">✕</button></li>'
-        for t in data["pending"]
-    ) or '<li><span class="meta">대기 중인 할 일이 없습니다. 아래에서 추가해보세요!</span></li>'
-    done_lis = "".join(
-        f'<li><input type="checkbox" class="todo-check" data-id="{t["id"]}" checked>'
-        f'<span class="tt tdone">{esc(t["title"])}</span>'
-        f'<span class="done-at">{_fmt_done_at(t.get("done_at"))}</span></li>'
-        for t in data["done"]
+    chart = (
+        '<div class="card"><b style="font-size:0.92rem">최근 14일 완료 추이</b>'
+        f'<div class="bars">{"".join(cols)}</div>'
+        '<div class="legend">'
+        '<span><span class="dot" style="background:#3557f0"></span>업무</span>'
+        '<span><span class="dot" style="background:#0e9384"></span>개인</span>'
+        "</div></div>"
     )
-    todo_card = f"""<div class="card">
-  <b style="font-size:0.92rem">할 일</b>
-  <form id="todo-form" class="row" style="margin:10px 0 6px">
-    <input type="text" id="todo-title" placeholder="할 일 입력 후 Enter" maxlength="200" autocomplete="off">
-    <button type="submit">추가</button>
-  </form>
-  <ul class="todo-list">{pending_lis}</ul>
-  {'<p class="meta" style="margin-top:14px">최근 완료</p><ul class="todo-list">' + done_lis + '</ul>' if done_lis else ''}
-</div>
-<script>
-function todoPost(url, body) {{
-  return fetch(url, {{ method: "POST",
-    headers: {{ "Content-Type": "application/json" }},
-    body: JSON.stringify(body || {{}}) }})
-    .then(function (r) {{ return r.json(); }})
-    .then(function (d) {{
-      if (!d.ok) alert(d.error || "오류가 발생했습니다.");
-      location.reload();
-    }});
-}}
-document.getElementById("todo-form").addEventListener("submit", function (e) {{
-  e.preventDefault();
-  var v = document.getElementById("todo-title").value.trim();
-  if (v) todoPost("/api/todos", {{ title: v }});
-}});
-document.querySelectorAll(".todo-check").forEach(function (cb) {{
-  cb.addEventListener("change", function () {{
-    todoPost("/api/todos/" + cb.dataset.id + "/toggle");
-  }});
-}});
-document.querySelectorAll(".todo-del").forEach(function (btn) {{
-  btn.addEventListener("click", function () {{
-    if (confirm("삭제할까요?")) todoPost("/api/todos/" + btn.dataset.id + "/delete");
-  }});
-}});
-</script>"""
-    return f'<div class="stat-row">{tiles}</div>{chart}{todo_card}'
+
+    today_items = [t for t in data["pending"]
+                   if t.get("due_date") and t["due_date"] <= today_iso]
+    rows = "".join(_todo_row(t, today_iso) for t in today_items[:8]) or \
+        '<li><span class="meta">오늘 마감인 할 일이 없습니다.</span></li>'
+    today_card = f"""<div class="card">
+  <div class="row" style="justify-content:space-between">
+    <b style="font-size:0.92rem">오늘 할 일 ({len(today_items)})</b>
+    <a href="/todo" style="font-size:0.84rem;font-weight:700">할 일 관리 →</a>
+  </div>
+  <ul class="todo-list" style="margin-top:6px">{rows}</ul>
+</div>"""
+    return f'<div class="stat-row">{tiles}</div>{today_card}{chart}{TODO_JS}'
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -715,13 +818,134 @@ def _admin_user(request: Request) -> str | None:
     return user if (user and auth.is_admin(user)) else None
 
 
+TODO_VIEWS = {"today": "오늘", "upcoming": "예정", "all": "전체", "done": "완료"}
+TODO_AREA_TABS = {"": "전체", "work": "💼 업무", "personal": "🌱 개인"}
+
+
+def _seg(base: str, options: dict, current: str, keep: dict) -> str:
+    links = []
+    for value, label in options.items():
+        qs = "&".join(f"{k}={quote(str(v))}" for k, v in {**keep, base: value}.items())
+        on = ' class="on"' if value == current else ""
+        links.append(f'<a href="/todo?{qs}"{on}>{label}</a>')
+    return f'<div class="seg">{"".join(links)}</div>'
+
+
+@app.get("/todo", response_class=HTMLResponse)
+def todo_page(request: Request, area: str = Query(""), view: str = Query("today")):
+    redirect = gate(request)
+    if redirect:
+        return redirect
+    user = user_of(request)
+    if not auth.is_admin(user):
+        return RedirectResponse("/bid", status_code=302)
+    area = area if area in ("work", "personal") else ""
+    view = view if view in TODO_VIEWS else "today"
+    today_iso = datetime.now(KST).date().isoformat()
+
+    if not todos.enabled():
+        return layout("할 일", "✅ 할 일", "/todo",
+            '<div class="card"><p class="error">Supabase가 설정되지 않았습니다.</p></div>',
+            user=user, admin=True)
+    try:
+        data = todos.list_todos(user)
+    except store.StoreError as e:
+        return layout("할 일", "✅ 할 일", "/todo",
+            f'<div class="card"><p class="error">{esc(str(e))}</p>'
+            '<p class="meta">Supabase에서 todos 테이블 확장 쿼리를 실행했는지 확인하세요.</p></div>',
+            user=user, admin=True)
+
+    pending = [t for t in data["pending"] if not area or t.get("area") == area]
+    done = [t for t in data["done"] if not area or t.get("area") == area]
+    today_items = [t for t in pending if t.get("due_date") and t["due_date"] <= today_iso]
+    upcoming = [t for t in pending if t.get("due_date") and t["due_date"] > today_iso]
+
+    view_counts = {"today": len(today_items), "upcoming": len(upcoming),
+                   "all": len(pending), "done": len(done)}
+    view_labels = {k: f"{v} {view_counts[k]}" for k, v in TODO_VIEWS.items()}
+
+    area_seg = _seg("area", TODO_AREA_TABS, area, {"view": view})
+    view_seg = _seg("view", view_labels, view, {"area": area})
+
+    default_area = area or "work"
+    form = f"""<form id="todo-form" class="card">
+  <div class="row">
+    <input type="text" id="t-title" placeholder="할 일 입력 — '보고서 금요일까지'처럼 쓰면 마감일 자동 인식" maxlength="200" autocomplete="off">
+    <button type="submit">추가</button>
+  </div>
+  <div class="row">
+    <select id="t-area">
+      <option value="work"{" selected" if default_area == "work" else ""}>💼 업무</option>
+      <option value="personal"{" selected" if default_area == "personal" else ""}>🌱 개인</option>
+    </select>
+    <input type="text" id="t-cat" placeholder="카테고리 (예: 제안서, 운동)" style="flex:0 1 180px;min-width:130px">
+    <input type="date" id="t-due" title="마감일">
+    <select id="t-pri">
+      <option value="1">🔴 높음</option>
+      <option value="2" selected>🟡 보통</option>
+      <option value="3">⚪ 낮음</option>
+    </select>
+    <label style="display:flex;align-items:center;gap:6px;font-size:0.84rem;color:var(--muted)">
+      <input type="checkbox" id="t-cal" style="width:16px;height:16px;accent-color:var(--accent)">📅 캘린더에도 추가
+    </label>
+  </div>
+</form>"""
+
+    if view == "today":
+        rows = "".join(_todo_row(t, today_iso) for t in today_items) or \
+            '<li><span class="meta">오늘 마감인 할 일이 없습니다. 🎉</span></li>'
+        body = f'<div class="card"><ul class="todo-list">{rows}</ul></div>'
+    elif view == "upcoming":
+        groups = []
+        current_due = None
+        for t in upcoming:
+            if t["due_date"] != current_due:
+                current_due = t["due_date"]
+                d = datetime.fromisoformat(current_due).date()
+                groups.append(f'</ul><p class="due-group">{d.month}/{d.day} ({["월","화","수","목","금","토","일"][d.weekday()]})</p><ul class="todo-list">')
+            groups.append(_todo_row(t, today_iso))
+        inner = "".join(groups)[5:] if groups else '<span class="meta">예정된 할 일이 없습니다.</span>'
+        body = f'<div class="card">{inner}</ul></div>'
+    elif view == "done":
+        rows = "".join(_todo_row(t, today_iso, done=True) for t in done) or \
+            '<li><span class="meta">완료한 할 일이 없습니다.</span></li>'
+        body = f'<div class="card"><ul class="todo-list">{rows}</ul></div>'
+    else:  # all
+        rows = "".join(_todo_row(t, today_iso) for t in pending) or \
+            '<li><span class="meta">할 일이 없습니다. 위에서 추가해보세요!</span></li>'
+        body = f'<div class="card"><ul class="todo-list">{rows}</ul></div>'
+
+    content = (f'<div class="row" style="margin-bottom:12px;justify-content:space-between">'
+               f"{area_seg}{view_seg}</div>{form}{body}{TODO_JS}")
+    return layout("할 일 관리", "✅ 할 일", "/todo", content, user=user, admin=True)
+
+
 @app.post("/api/todos")
 def api_todo_add(request: Request, body: dict = Body(...)):
     user = _admin_user(request)
     if not user:
         return {"ok": False, "error": "권한이 없습니다."}
     try:
-        todos.add_todo(user, str(body.get("title", "")))
+        created = todos.add_todo(
+            user,
+            str(body.get("title", "")),
+            area=str(body.get("area", "work")),
+            category=str(body.get("category", "")),
+            due_date=str(body.get("due")) if body.get("due") else None,
+            priority=body.get("priority") if isinstance(body.get("priority"), int) else 2,
+        )
+        return {"ok": True, "todo": created}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/todos/{todo_id}/update")
+def api_todo_update(request: Request, todo_id: int, body: dict = Body(...)):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        todos.update_todo(user, todo_id, body)
         return {"ok": True}
     except store.StoreError as e:
         return {"ok": False, "error": str(e)}

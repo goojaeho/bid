@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 
-PERSONAL_NAV = [("/", "🏠 메인")]
+PERSONAL_NAV = [("/", "🏠 메인"), ("/todo", "✅ 할 일")]
 PUBLIC_NAV = [
     ("/bid", "입찰공고"),
     ("/gov", "정부과제"),
@@ -230,6 +230,42 @@ BASE = """<!doctype html>
     width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent);
     flex-shrink: 0;
   }
+
+  .seg { display: inline-flex; background: #eef0f4; border-radius: 10px; padding: 3px; gap: 2px; }
+  .seg a {
+    padding: 6px 14px; border-radius: 8px; font-size: 0.86rem; font-weight: 700;
+    color: var(--muted);
+  }
+  .seg a:hover { color: var(--text); text-decoration: none; }
+  .seg a.on { background: #fff; color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+  .pri { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .pri-1 { background: #d92d20; }
+  .pri-2 { background: #f79009; }
+  .pri-3 { background: #c8cdd8; }
+  .area-chip {
+    display: inline-block; padding: 1px 8px; border-radius: 999px;
+    font-size: 0.72rem; font-weight: 700; white-space: nowrap;
+  }
+  .area-work { background: #e9eeff; color: #2645cc; }
+  .area-personal { background: #e0f5f1; color: #0a7264; }
+  .todo-act {
+    background: #fff; border: 1px solid var(--line); border-radius: 7px;
+    color: var(--muted); font-size: 0.74rem; padding: 3px 9px; cursor: pointer;
+    font-weight: 600;
+  }
+  .todo-act:hover { background: #f4f5f8; color: var(--text); }
+  .due-group { color: var(--muted); font-size: 0.8rem; font-weight: 700;
+               margin: 14px 4px 4px; }
+
+  .legend { display: flex; gap: 16px; align-items: center; font-size: 0.78rem;
+            color: var(--muted); margin-top: 6px; }
+  .legend .dot { display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+                 margin-right: 5px; }
+  .bar-seg { width: 100%; max-width: 26px; min-height: 0; }
+  .bar-seg.work { background: #3557f0; border-radius: 0; }
+  .bar-seg.personal { background: #0e9384; border-radius: 4px 4px 0 0; }
+  .bar-seg.first { border-radius: 4px 4px 0 0; }
+  .bar-gap { height: 2px; width: 100%; }
 
   @media (max-width: 720px) {
     .shell { flex-direction: column; }
