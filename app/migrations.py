@@ -83,9 +83,15 @@ def run() -> None:
 
 def applied_version() -> int | None:
     """적용된 최신 마이그레이션 버전 (DATABASE_URL 미설정/오류 시 None)."""
+    status = db_status()
+    return int(status[3:]) if status.startswith("ok:") else None
+
+
+def db_status() -> str:
+    """'unset' | 'ok:N' | 'error:<사유 요약>' — 비밀정보는 노출하지 않는다."""
     url = database_url()
     if not url:
-        return None
+        return "unset"
     try:
         import psycopg
 
@@ -93,6 +99,7 @@ def applied_version() -> int | None:
             row = conn.execute(
                 "select coalesce(max(version), 0) from schema_migrations"
             ).fetchone()
-            return row[0] if row else 0
-    except Exception:
-        return None
+            return f"ok:{row[0] if row else 0}"
+    except Exception as e:
+        reason = str(e).split("\n")[0][:120]
+        return f"error:{type(e).__name__}: {reason}"
