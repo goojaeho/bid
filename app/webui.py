@@ -330,7 +330,7 @@ BASE = """<!doctype html>
 <h1>__HEADING__</h1>
 __CONTENT__
 </main>
-<footer>출처: 나라장터 · 기업마당 · K-Startup · NIPA · KOCCA · DIP · 대구/경북/부산TP — 실시간 조회 결과이며 원문 공고를 반드시 확인하세요.</footer>
+__FOOTER__
 </div>
 </div>
 <script>
@@ -518,6 +518,10 @@ def layout(title: str, heading: str, active_path: str, content: str,
     if user:
         userbox = (f'<span>{user}</span><br>'
                    f'<a href="/logout">{icon("log-out", 12)} 로그아웃</a><br>')
+    footer = ""
+    if active_path in ("/bid", "/gov", "/favs"):
+        footer = ("<footer>출처: 나라장터 · 기업마당 · K-Startup · NIPA · KOCCA · DIP · "
+                  "대구/경북/부산TP — 실시간 조회 결과이며 원문 공고를 반드시 확인하세요.</footer>")
     ai = "1" if os.environ.get("GEMINI_API_KEY", "").strip() else "0"
     sf = "1" if (user and store.enabled()) else "0"
     return (
@@ -525,6 +529,7 @@ def layout(title: str, heading: str, active_path: str, content: str,
         .replace("__NAV__", nav)
         .replace("__HEADING__", heading)
         .replace("__CONTENT__", content)
+        .replace("__FOOTER__", footer)
         .replace("__USER__", userbox)
         .replace("__BELL__", icon("bell", 12))
         .replace("__AI__", ai)
