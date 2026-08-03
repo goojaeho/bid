@@ -25,13 +25,15 @@ from fastapi.responses import RedirectResponse
 
 from fastapi import Body
 
-from app import auth, gov_sources, kakao, store, summarize, todos
+from app import auth, gov_sources, kakao, migrations, store, summarize, todos
 from app.g2b_client import CATEGORIES, G2BApiError, G2BClient
 from app.webui import icon, layout
 
 KST = ZoneInfo("Asia/Seoul")
 
 app = FastAPI(title="나라장터 입찰공고 검색")
+
+migrations.run()  # DATABASE_URL 설정 시 콜드스타트에서 자동 마이그레이션
 
 
 @app.middleware("http")

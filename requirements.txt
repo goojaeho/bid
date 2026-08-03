@@ -4,3 +4,4 @@ fastapi>=0.110
 beautifulsoup4>=4.12
 pypdf>=4.0
 olefile>=0.47
+psycopg[binary]>=3.1
