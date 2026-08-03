@@ -110,6 +110,14 @@ def handle_callback(code: str) -> str:
     return email
 
 
+def is_admin(email: str | None) -> bool:
+    """개인 기능(메인 대시보드) 접근 가능 여부. ADMIN_EMAILS 미설정 시 아무도 아님."""
+    if not email:
+        return False
+    admins = [e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()]
+    return email.lower() in admins
+
+
 def allowed(email: str) -> bool:
     emails = [e.strip().lower() for e in os.environ.get("ALLOWED_EMAILS", "").split(",") if e.strip()]
     domain = os.environ.get("ALLOWED_DOMAIN", "").strip().lower().lstrip("@")

@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import os
 
-NAV_ITEMS = [
-    ("/", "입찰공고"),
+PERSONAL_NAV = [("/", "🏠 메인")]
+PUBLIC_NAV = [
+    ("/bid", "입찰공고"),
     ("/gov", "정부과제"),
     ("/favs", "⭐ 즐겨찾기"),
 ]
@@ -40,28 +41,31 @@ BASE = """<!doctype html>
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
 
-  header {
-    background: var(--card); border-bottom: 1px solid var(--line);
-    position: sticky; top: 0; z-index: 10;
+  .shell { display: flex; min-height: 100vh; }
+  .sidebar {
+    width: 200px; flex-shrink: 0; background: var(--card);
+    border-right: 1px solid var(--line); padding: 20px 12px;
+    display: flex; flex-direction: column; gap: 22px;
+    position: sticky; top: 0; height: 100vh;
   }
-  .header-inner {
-    max-width: 1140px; margin: 0 auto; padding: 0 20px;
-    display: flex; align-items: center; gap: 28px; height: 56px;
-  }
-  .brand { font-size: 1.05rem; font-weight: 800; color: var(--text); letter-spacing: -0.01em; }
+  .brand { font-size: 1.05rem; font-weight: 800; color: var(--text);
+           letter-spacing: -0.01em; padding: 0 10px; }
   .brand b { color: var(--accent); }
-  nav { display: flex; gap: 4px; height: 100%; }
+  nav { display: flex; flex-direction: column; gap: 2px; }
   nav a {
-    display: flex; align-items: center; padding: 0 14px;
+    display: block; padding: 9px 12px; border-radius: 8px;
     color: var(--muted); font-weight: 600; font-size: 0.92rem;
-    border-bottom: 2px solid transparent; margin-bottom: -1px;
   }
-  nav a:hover { color: var(--text); text-decoration: none; }
-  nav a.active { color: var(--accent); border-bottom-color: var(--accent); }
-  .userbox { margin-left: auto; color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
-  .userbox a { color: var(--muted); margin-left: 8px; }
+  nav a:hover { color: var(--text); background: #f4f5f8; text-decoration: none; }
+  nav a.active { color: var(--accent); background: #eef2ff; }
+  .side-foot {
+    margin-top: auto; padding: 0 10px; color: var(--muted);
+    font-size: 0.76rem; line-height: 1.8; word-break: break-all;
+  }
+  .side-foot a { color: var(--muted); }
+  .content { flex: 1; min-width: 0; }
 
-  main { max-width: 1140px; margin: 0 auto; padding: 24px 20px 48px; }
+  main { max-width: 1140px; margin: 0 auto; padding: 24px 24px 48px; }
   h1 { font-size: 1.25rem; font-weight: 800; letter-spacing: -0.01em; margin: 0 0 16px; }
 
   .card {
@@ -192,26 +196,72 @@ BASE = """<!doctype html>
     max-width: 1140px; margin: 0 auto; padding: 0 20px 32px;
     color: var(--muted); font-size: 0.78rem;
   }
-  @media (max-width: 640px) {
-    .header-inner { gap: 10px; overflow-x: auto; }
+  .stat-row { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+  .stat-tile {
+    flex: 1; min-width: 130px; background: var(--card);
+    border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+  }
+  .stat-tile .num { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.02em; }
+  .stat-tile .lbl { color: var(--muted); font-size: 0.8rem; font-weight: 600; }
+  .bars { display: flex; align-items: flex-end; gap: 2px; height: 120px; margin-top: 8px; }
+  .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
+  .bar {
+    width: 100%; max-width: 26px; background: var(--accent);
+    border-radius: 4px 4px 0 0; min-height: 2px;
+  }
+  .bar.zero { background: #e7e9ee; }
+  .bar.today { background: var(--accent-dark); }
+  .bar-lbl { color: var(--muted); font-size: 0.62rem; white-space: nowrap; }
+  .todo-list { list-style: none; margin: 0; padding: 0; }
+  .todo-list li {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 4px; border-bottom: 1px solid #f0f1f5;
+  }
+  .todo-list li:last-child { border-bottom: none; }
+  .todo-list .tt { flex: 1; word-break: break-word; }
+  .todo-list .done-at { color: var(--muted); font-size: 0.76rem; white-space: nowrap; }
+  .todo-list .tdone { color: var(--muted); text-decoration: line-through; }
+  .todo-del {
+    background: none; border: none; color: #c8cdd8; cursor: pointer;
+    font-size: 0.9rem; padding: 2px 6px;
+  }
+  .todo-del:hover { color: #b42318; background: none; }
+  .todo-check {
+    width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent);
+    flex-shrink: 0;
+  }
+
+  @media (max-width: 720px) {
+    .shell { flex-direction: column; }
+    .sidebar {
+      width: auto; height: auto; position: static;
+      flex-direction: row; align-items: center; gap: 12px;
+      padding: 10px 12px; overflow-x: auto; border-right: none;
+      border-bottom: 1px solid var(--line);
+    }
+    nav { flex-direction: row; }
+    nav a { padding: 7px 10px; white-space: nowrap; }
+    .side-foot { margin-top: 0; margin-left: auto; white-space: nowrap; line-height: 1.3; }
     main { padding: 16px 12px 40px; }
     .card { padding: 12px; }
   }
 </style>
 </head>
 <body data-ai="__AI__" data-sf="__SF__">
-<header>
-  <div class="header-inner">
-    <span class="brand">One<b>AI</b>Gen</span>
-    <nav>__NAV__</nav>
-    <span class="userbox">__USER__</span>
-  </div>
-</header>
+<div class="shell">
+<aside class="sidebar">
+  <span class="brand">One<b>AI</b>Gen</span>
+  <nav>__NAV__</nav>
+  <div class="side-foot">__USER__<a href="/kakao">🔔 카카오 알림</a></div>
+</aside>
+<div class="content">
 <main>
 <h1>__HEADING__</h1>
 __CONTENT__
 </main>
-<footer>출처: 나라장터 · 기업마당 · K-Startup · NIPA · KOCCA · DIP · 대구/경북/부산TP — 실시간 조회 결과이며 원문 공고를 반드시 확인하세요. · <a href="/kakao">카카오 알림 설정</a></footer>
+<footer>출처: 나라장터 · 기업마당 · K-Startup · NIPA · KOCCA · DIP · 대구/경북/부산TP — 실시간 조회 결과이며 원문 공고를 반드시 확인하세요.</footer>
+</div>
+</div>
 <script>
 var AI_ON = document.body.dataset.ai === "1";
 var SERVER_FAVS = document.body.dataset.sf === "1";
@@ -385,16 +435,17 @@ document.querySelectorAll("table th").forEach(function (th, idx) {
 
 
 def layout(title: str, heading: str, active_path: str, content: str,
-           user: str | None = None) -> str:
+           user: str | None = None, admin: bool = False) -> str:
     from app import store
+    items = (PERSONAL_NAV if admin else []) + PUBLIC_NAV
     parts = []
-    for path, label in NAV_ITEMS:
+    for path, label in items:
         cls = ' class="active"' if path == active_path else ""
         parts.append(f'<a href="{path}"{cls}>{label}</a>')
     nav = "".join(parts)
     userbox = ""
     if user:
-        userbox = f'{user} <a href="/logout">로그아웃</a>'
+        userbox = f'<span>{user}</span><br><a href="/logout">로그아웃</a><br>'
     ai = "1" if os.environ.get("GEMINI_API_KEY", "").strip() else "0"
     sf = "1" if (user and store.enabled()) else "0"
     return (

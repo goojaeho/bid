@@ -25,7 +25,7 @@ from fastapi.responses import RedirectResponse
 
 from fastapi import Body
 
-from app import auth, gov_sources, kakao, store, summarize
+from app import auth, gov_sources, kakao, store, summarize, todos
 from app.g2b_client import CATEGORIES, G2BApiError, G2BClient
 from app.webui import layout
 
@@ -128,10 +128,10 @@ def render(params: dict, body: str) -> str:
     )
     min_amt = params["min_amt"] if params["min_amt"] is not None else ""
     max_amt = params["max_amt"] if params["max_amt"] is not None else ""
-    form = f"""<form method="get" action="/" class="card">
+    form = f"""<form method="get" action="/bid" class="card">
   <div class="row">
     <span class="quick-label">빠른 검색</span>
-    <a class="chip" href="/?q={quote(RECOMMEND_BID)}&days=7"
+    <a class="chip" href="/bid?q={quote(RECOMMEND_BID)}&days=7"
        title="추천 키워드: {esc(RECOMMEND_BID)}">⭐ {esc(RECOMMEND_BID.replace(",", " · "))}</a>
   </div>
   <div class="row">
@@ -148,8 +148,9 @@ def render(params: dict, body: str) -> str:
     <select name="sort">{sort_options}</select>
   </div>
 </form>"""
-    return layout("나라장터 입찰공고 검색", "입찰공고 검색", "/", form + body,
-                  user=params.get("_user"))
+    return layout("나라장터 입찰공고 검색", "입찰공고 검색", "/bid", form + body,
+                  user=params.get("_user"),
+                  admin=auth.is_admin(params.get("_user")))
 
 
 def _amount_of(item: dict) -> int | None:
@@ -256,7 +257,7 @@ def render_rows(items: list[tuple[str, dict]]) -> str:
     )
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/bid", response_class=HTMLResponse)
 def search(
     request: Request,
     q: str = Query("", max_length=100),
@@ -457,7 +458,7 @@ def gov(
             _gov_form(params)
             + '<p class="meta">검색 조건을 선택하고 검색 버튼을 눌러주세요. '
             "8개 출처(기업마당·K-Startup·NIPA·KOCCA·DIP·대구/경북/부산TP)를 실시간으로 수집합니다.</p>",
-            user=user_of(request))
+            user=user_of(request), admin=auth.is_admin(user_of(request)))
 
     names = [src] if src in gov_sources.SOURCES else list(gov_sources.SOURCES)
     items: list[dict] = []
@@ -507,7 +508,8 @@ def gov(
         parts.append('<p class="meta">검색 결과가 없습니다. 키워드·필터를 조정해보세요.</p>')
 
     return layout("정부과제 검색", "정부과제·지원사업 검색", "/gov",
-                  _gov_form(params) + "".join(parts), user=user_of(request))
+                  _gov_form(params) + "".join(parts), user=user_of(request),
+                  admin=auth.is_admin(user_of(request)))
 
 
 # ------------------------------------------------------------ 카카오 알림
@@ -586,6 +588,155 @@ def notify(request: Request):
     except kakao.KakaoError as e:
         return {"ok": False, "matched": len(matched), "error": str(e)}
     return {"ok": True, "matched": len(matched), "sent": True}
+
+
+def _fmt_done_at(raw: str | None) -> str:
+    if not raw:
+        return ""
+    try:
+        return datetime.fromisoformat(raw).astimezone(KST).strftime("%m/%d %H:%M")
+    except (ValueError, TypeError):
+        return ""
+
+
+def _home_content(data: dict, st: dict) -> str:
+    tiles = "".join(
+        f'<div class="stat-tile"><div class="num">{st[k]:,}</div>'
+        f'<div class="lbl">{lbl}</div></div>'
+        for k, lbl in [("today", "오늘 완료"), ("week", "이번 주 완료"),
+                       ("month", "이번 달 완료"), ("pending", "대기 중")]
+    )
+    max_count = max([d["count"] for d in st["daily"]] + [1])
+    today_label = st["daily"][-1]["date"]
+    bars = []
+    for i, d in enumerate(st["daily"]):
+        height = max(int(d["count"] / max_count * 100), 2)
+        cls = "bar today" if d["date"] == today_label else ("bar" if d["count"] else "bar zero")
+        label = d["label"] if (i % 2 == 1 or i == len(st["daily"]) - 1) else ""
+        bars.append(
+            f'<div class="bar-col" title="{d["label"]} · {d["count"]}건 완료">'
+            f'<div class="{cls}" style="height:{height}%"></div>'
+            f'<span class="bar-lbl">{label}</span></div>'
+        )
+    chart = (f'<div class="card"><b style="font-size:0.92rem">최근 14일 완료 추이</b>'
+             f'<div class="bars">{"".join(bars)}</div></div>')
+
+    pending_lis = "".join(
+        f'<li><input type="checkbox" class="todo-check" data-id="{t["id"]}">'
+        f'<span class="tt">{esc(t["title"])}</span>'
+        f'<button type="button" class="todo-del" data-id="{t["id"]}" title="삭제">✕</button></li>'
+        for t in data["pending"]
+    ) or '<li><span class="meta">대기 중인 할 일이 없습니다. 아래에서 추가해보세요!</span></li>'
+    done_lis = "".join(
+        f'<li><input type="checkbox" class="todo-check" data-id="{t["id"]}" checked>'
+        f'<span class="tt tdone">{esc(t["title"])}</span>'
+        f'<span class="done-at">{_fmt_done_at(t.get("done_at"))}</span></li>'
+        for t in data["done"]
+    )
+    todo_card = f"""<div class="card">
+  <b style="font-size:0.92rem">할 일</b>
+  <form id="todo-form" class="row" style="margin:10px 0 6px">
+    <input type="text" id="todo-title" placeholder="할 일 입력 후 Enter" maxlength="200" autocomplete="off">
+    <button type="submit">추가</button>
+  </form>
+  <ul class="todo-list">{pending_lis}</ul>
+  {'<p class="meta" style="margin-top:14px">최근 완료</p><ul class="todo-list">' + done_lis + '</ul>' if done_lis else ''}
+</div>
+<script>
+function todoPost(url, body) {{
+  return fetch(url, {{ method: "POST",
+    headers: {{ "Content-Type": "application/json" }},
+    body: JSON.stringify(body || {{}}) }})
+    .then(function (r) {{ return r.json(); }})
+    .then(function (d) {{
+      if (!d.ok) alert(d.error || "오류가 발생했습니다.");
+      location.reload();
+    }});
+}}
+document.getElementById("todo-form").addEventListener("submit", function (e) {{
+  e.preventDefault();
+  var v = document.getElementById("todo-title").value.trim();
+  if (v) todoPost("/api/todos", {{ title: v }});
+}});
+document.querySelectorAll(".todo-check").forEach(function (cb) {{
+  cb.addEventListener("change", function () {{
+    todoPost("/api/todos/" + cb.dataset.id + "/toggle");
+  }});
+}});
+document.querySelectorAll(".todo-del").forEach(function (btn) {{
+  btn.addEventListener("click", function () {{
+    if (confirm("삭제할까요?")) todoPost("/api/todos/" + btn.dataset.id + "/delete");
+  }});
+}});
+</script>"""
+    return f'<div class="stat-row">{tiles}</div>{chart}{todo_card}'
+
+
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    redirect = gate(request)
+    if redirect:
+        return redirect
+    # 기존 북마크(/?q=...)는 쿼리 유지한 채 입찰 페이지로
+    if request.query_params:
+        return RedirectResponse(f"/bid?{request.query_params}", status_code=302)
+    user = user_of(request)
+    if not auth.is_admin(user):
+        return RedirectResponse("/bid", status_code=302)
+    if not todos.enabled():
+        return layout("메인", "🏠 내 작업 공간", "/",
+            '<div class="card"><p class="error">Supabase가 설정되지 않았습니다. '
+            "SUPABASE_URL / SUPABASE_SERVICE_KEY 환경변수를 확인하세요.</p></div>",
+            user=user, admin=True)
+    try:
+        data = todos.list_todos(user)
+        st = todos.stats(user, len(data["pending"]))
+        content = _home_content(data, st)
+    except store.StoreError as e:
+        content = (f'<div class="card"><p class="error">{esc(str(e))}</p>'
+                   '<p class="meta">Supabase SQL Editor에서 todos 테이블을 만들었는지 확인하세요.</p></div>')
+    return layout("메인", "🏠 내 작업 공간", "/", content, user=user, admin=True)
+
+
+def _admin_user(request: Request) -> str | None:
+    user = user_of(request)
+    return user if (user and auth.is_admin(user)) else None
+
+
+@app.post("/api/todos")
+def api_todo_add(request: Request, body: dict = Body(...)):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        todos.add_todo(user, str(body.get("title", "")))
+        return {"ok": True}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/todos/{todo_id}/toggle")
+def api_todo_toggle(request: Request, todo_id: int):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        todos.toggle_todo(user, todo_id)
+        return {"ok": True}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/todos/{todo_id}/delete")
+def api_todo_delete(request: Request, todo_id: int):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        todos.delete_todo(user, todo_id)
+        return {"ok": True}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -676,7 +827,8 @@ window.renderFavs = function () {
 };
 document.addEventListener("DOMContentLoaded", window.renderFavs);
 </script>"""
-    return layout("즐겨찾기", "⭐ 즐겨찾기", "/favs", content, user=user_of(request))
+    return layout("즐겨찾기", "⭐ 즐겨찾기", "/favs", content, user=user_of(request),
+                  admin=auth.is_admin(user_of(request)))
 
 
 @app.get("/api/favs")
