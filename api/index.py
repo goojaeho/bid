@@ -1094,6 +1094,123 @@ def api_todo_delete(request: Request, todo_id: int):
         return {"ok": False, "error": str(e)}
 
 
+PDF_PAGE = """<div class="card">
+  <p style="margin:4px 0 6px"><b>PDF 압축</b> — 파일이 서버로 전송되지 않고 이 브라우저 안에서 압축됩니다.
+  IR 덱처럼 민감한 문서도 안전하고, 100MB가 넘는 큰 파일도 처리됩니다.</p>
+  <div class="row" style="margin-top:12px">
+    <input type="file" id="pdf-file" accept="application/pdf,.pdf" style="flex:1;min-width:200px">
+    <select id="pdf-preset">
+      <option value="/screen">고압축 (화면 공유용)</option>
+      <option value="/ebook" selected>균형 (이메일 첨부용 추천)</option>
+      <option value="/printer">고화질 (인쇄용)</option>
+    </select>
+    <button type="button" id="pdf-run">압축하기</button>
+  </div>
+  <p class="meta" style="margin-top:10px">첫 사용 시 압축 엔진(16MB)을 한 번 내려받습니다.
+  대용량 파일(100MB+)은 1~3분 정도 걸릴 수 있어요 — 탭을 닫지 마세요.</p>
+  <div id="pdf-status"></div>
+  <div id="pdf-result"></div>
+</div>
+<script>
+(function () {
+  var GS_CDN = "https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/";
+  var workerCode = [
+    'importScripts("' + GS_CDN + 'gs.js");',
+    'self.onmessage = function (e) {',
+    '  var buf = e.data.buf, preset = e.data.preset;',
+    '  Module({ noInitialRun: true,',
+    '    locateFile: function (f) { return "' + GS_CDN + '" + f; },',
+    '    print: function (t) {',
+    '      var m = /^Page ([0-9]+)/.exec(t);',
+    '      if (m) postMessage({ type: "page", page: +m[1] });',
+    '    },',
+    '    printErr: function () {} })',
+    '  .then(function (gs) {',
+    '    gs.FS.writeFile("in.pdf", new Uint8Array(buf));',
+    '    var code = gs.callMain(["-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.5",',
+    '      "-dPDFSETTINGS=" + preset, "-dNOPAUSE", "-dBATCH",',
+    '      "-sOutputFile=out.pdf", "in.pdf"]);',
+    '    if (code !== 0) { postMessage({ type: "error", message: "압축 실패 (코드 " + code + ")" }); return; }',
+    '    var out = gs.FS.readFile("out.pdf");',
+    '    postMessage({ type: "done", out: out.buffer }, [out.buffer]);',
+    '  })',
+    '  .catch(function (err) { postMessage({ type: "error", message: String(err) }); });',
+    '};',
+  ].join("\\n");
+
+  function mb(n) { return (n / 1048576).toFixed(2) + " MB"; }
+  var statusEl = document.getElementById("pdf-status");
+  var resultEl = document.getElementById("pdf-result");
+  var runBtn = document.getElementById("pdf-run");
+  var timer = null;
+
+  runBtn.addEventListener("click", function () {
+    var fileInput = document.getElementById("pdf-file");
+    var file = fileInput.files && fileInput.files[0];
+    if (!file) { alert("PDF 파일을 선택해주세요."); return; }
+    var preset = document.getElementById("pdf-preset").value;
+    runBtn.disabled = true;
+    resultEl.innerHTML = "";
+    var start = Date.now(), lastPage = 0;
+    function setStatus(extra) {
+      var sec = Math.round((Date.now() - start) / 1000);
+      statusEl.innerHTML = '<p class="meta">' + extra + " · " + sec + "초 경과</p>";
+    }
+    setStatus("압축 엔진 로딩 중…");
+    timer = setInterval(function () {
+      setStatus(lastPage ? lastPage + "페이지 처리 중…" : "압축 엔진 로딩 중…");
+    }, 1000);
+
+    file.arrayBuffer().then(function (buf) {
+      var origSize = buf.byteLength;
+      var worker = new Worker(URL.createObjectURL(
+        new Blob([workerCode], { type: "text/javascript" })));
+      worker.onmessage = function (e) {
+        var d = e.data;
+        if (d.type === "page") { lastPage = d.page; return; }
+        clearInterval(timer);
+        runBtn.disabled = false;
+        worker.terminate();
+        if (d.type === "error") {
+          statusEl.innerHTML = '<p class="error">' + d.message + "</p>";
+          return;
+        }
+        var outBlob = new Blob([d.out], { type: "application/pdf" });
+        var name = file.name.replace(/\\.pdf$/i, "") + "_압축.pdf";
+        var saved = 100 * (1 - outBlob.size / origSize);
+        statusEl.innerHTML = "";
+        resultEl.innerHTML = '<div class="ai-sum" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">'
+          + "<span><b>" + mb(origSize) + "</b> → <b>" + mb(outBlob.size) + "</b> ("
+          + (saved > 0 ? saved.toFixed(0) + "% 절감" : "절감 없음") + ")</span>"
+          + '<a id="pdf-dl" class="btn-outline" style="padding:7px 16px">내려받기</a></div>';
+        var a = document.getElementById("pdf-dl");
+        a.href = URL.createObjectURL(outBlob);
+        a.download = name;
+      };
+      worker.onerror = function (err) {
+        clearInterval(timer);
+        runBtn.disabled = false;
+        statusEl.innerHTML = '<p class="error">엔진 오류: ' + (err.message || err) + "</p>";
+      };
+      worker.postMessage({ buf: buf, preset: preset }, [buf]);
+    });
+  });
+})();
+</script>"""
+
+
+@app.get("/pdf", response_class=HTMLResponse)
+def pdf_page(request: Request):
+    redirect = gate(request)
+    if redirect:
+        return redirect
+    user = user_of(request)
+    if not auth.is_admin(user):
+        return RedirectResponse("/bid", status_code=302)
+    return layout("PDF 압축", icon("download", 20) + " PDF 압축", "/pdf",
+                  PDF_PAGE, user=user, admin=True)
+
+
 @app.get("/login", response_class=HTMLResponse)
 def login_page():
     if not auth.enabled():

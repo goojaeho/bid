@@ -23,6 +23,7 @@ ICONS = {
     "plus": '<path d="M5 12h14" /><path d="M12 5v14" />',
     "corner-down-right": '<path d="m15 10 5 5-5 5" /><path d="M4 4v7a4 4 0 0 0 4 4h12" />',
     "log-out": '<path d="m16 17 5-5-5-5" /><path d="M21 12H9" /><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />',
+    "download": '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" x2="12" y1="15" y2="3" />',
 }
 
 
@@ -33,7 +34,11 @@ def icon(name: str, size: int = 16) -> str:
             f'stroke-linejoin="round" aria-hidden="true">{inner}</svg>')
 
 
-PERSONAL_NAV = [("/", "메인", "house"), ("/todo", "할 일", "list-checks")]
+PERSONAL_NAV = [
+    ("/", "메인", "house"),
+    ("/todo", "할 일", "list-checks"),
+    ("/pdf", "PDF 압축", "download"),
+]
 PUBLIC_NAV = [
     ("/bid", "입찰공고", "gavel"),
     ("/gov", "정부과제", "landmark"),
