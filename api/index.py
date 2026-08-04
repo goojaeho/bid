@@ -919,8 +919,11 @@ def home(request: Request):
             "SUPABASE_URL / SUPABASE_SERVICE_KEY 환경변수를 확인하세요.</p></div>",
             user=user, admin=True)
     try:
-        data = todos.list_todos(user)
-        st = todos.stats(user, len(data["pending"]))
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            data_f = pool.submit(todos.list_todos, user)
+            rows_f = pool.submit(todos.stats_rows, user)
+            data = data_f.result()
+            st = todos.compute_stats(rows_f.result(), len(data["pending"]))
         content = _home_content(data, st)
     except store.StoreError as e:
         content = (f'<div class="card"><p class="error">{esc(str(e))}</p>'

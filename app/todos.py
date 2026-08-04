@@ -30,6 +30,8 @@ import requests
 
 from app.store import StoreError, _sb_headers, _supabase_conf
 
+_session = requests.Session()  # 인스턴스 내 연결 재사용 (TLS 핸드셰이크 절감)
+
 KST = ZoneInfo("Asia/Seoul")
 TIMEOUT = 10
 MAX_TITLE = 200
@@ -51,7 +53,7 @@ def _request(method: str, path: str, **kw) -> requests.Response:
     url, key = conf
     kw.setdefault("timeout", TIMEOUT)
     headers = {**_sb_headers(key), **kw.pop("headers", {})}
-    resp = requests.request(method, f"{url}/rest/v1/{path}", headers=headers, **kw)
+    resp = _session.request(method, f"{url}/rest/v1/{path}", headers=headers, **kw)
     if resp.status_code >= 400:
         raise StoreError(f"todos {method} 실패({resp.status_code}): {resp.text[:150]}")
     return resp
@@ -110,20 +112,31 @@ def parse_nl_date(title: str, today: date | None = None) -> tuple[str, str | Non
 
 # ------------------------------------------------------------ CRUD
 
-def list_todos(email: str) -> dict:
-    """미완료 전체(마감 임박순) + 최근 완료 30건."""
-    pending = _request(
+def _fetch_pending(email: str) -> list[dict]:
+    return _request(
         "GET", "todos",
         params={"select": FIELDS, "email": f"eq.{email}", "done": "is.false",
                 "order": "due_date.asc.nullslast,priority.asc,created_at.asc",
                 "limit": "200"},
     ).json()
-    done = _request(
+
+
+def _fetch_done(email: str) -> list[dict]:
+    return _request(
         "GET", "todos",
         params={"select": FIELDS + ",done_at", "email": f"eq.{email}",
                 "done": "is.true", "order": "done_at.desc", "limit": "30"},
     ).json()
-    return {"pending": pending, "done": done}
+
+
+def list_todos(email: str) -> dict:
+    """미완료 전체(마감 임박순) + 최근 완료 30건 (병렬 조회)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pending_f = pool.submit(_fetch_pending, email)
+        done_f = pool.submit(_fetch_done, email)
+        return {"pending": pending_f.result(), "done": done_f.result()}
 
 
 def add_todo(email: str, title: str, area: str = "work", category: str = "",
@@ -238,11 +251,15 @@ def compute_stats(done_rows: list[dict], pending_count: int,
     }
 
 
-def stats(email: str, pending_count: int) -> dict:
+def stats_rows(email: str) -> list[dict]:
+    """통계용 완료 행 조회 (list_todos와 병렬 실행 가능)."""
     since = (datetime.now(KST) - timedelta(days=35)).isoformat()
-    rows = _request(
+    return _request(
         "GET", "todos",
         params={"select": "done_at,area", "email": f"eq.{email}",
                 "done": "is.true", "done_at": f"gte.{since}", "limit": "1000"},
     ).json()
-    return compute_stats(rows, pending_count)
+
+
+def stats(email: str, pending_count: int) -> dict:
+    return compute_stats(stats_rows(email), pending_count)

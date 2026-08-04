@@ -106,7 +106,8 @@ class RoutingTest(unittest.TestCase):
     def test_admin_dashboard_renders(self):
         with patch.object(todos, "enabled", return_value=True), \
              patch.object(todos, "list_todos", return_value=self.sample), \
-             patch.object(todos, "stats", return_value=self.stats):
+             patch.object(todos, "stats_rows", return_value=[
+                 {"done_at": "2026-07-29T10:00:00+09:00", "area": "work"}]):
             r = self.client.get("/", cookies=self.admin_cookie)
         self.assertEqual(r.status_code, 200)
         for needle in ["오늘 완료", "최근 14일", "오늘 할 일", "할 일 관리 →",

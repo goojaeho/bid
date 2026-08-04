@@ -15,6 +15,8 @@ from urllib.parse import quote
 
 import requests
 
+_session = requests.Session()
+
 TIMEOUT = 10
 MAX_ITEMS = 500
 
@@ -60,7 +62,7 @@ def _sb_headers(key: str) -> dict:
 
 def _sb_get(email: str) -> dict:
     url, key = _supabase_conf()
-    resp = requests.get(
+    resp = _session.get(
         f"{url}/rest/v1/favs",
         params={"select": "data", "email": f"eq.{email}"},
         headers=_sb_headers(key),
@@ -76,7 +78,7 @@ def _sb_get(email: str) -> dict:
 
 def _sb_set(email: str, favs: dict) -> None:
     url, key = _supabase_conf()
-    resp = requests.post(
+    resp = _session.post(
         f"{url}/rest/v1/favs",
         json={"email": email, "data": favs},
         headers={**_sb_headers(key), "Prefer": "resolution=merge-duplicates"},
@@ -90,7 +92,7 @@ def _sb_set(email: str, favs: dict) -> None:
 
 def _redis_command(cmd: list) -> dict:
     url, token = _upstash_conf()
-    resp = requests.post(
+    resp = _session.post(
         url, json=cmd,
         headers={"Authorization": f"Bearer {token}"},
         timeout=TIMEOUT,
