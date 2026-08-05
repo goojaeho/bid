@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 import json
 
@@ -1197,6 +1197,76 @@ PDF_PAGE = """<div class="card">
   });
 })();
 </script>"""
+
+
+READER_DIR = Path(__file__).resolve().parent.parent / "static" / "reader"
+READER_ASSETS = {
+    "app.js": "application/javascript",
+    "library.js": "application/javascript",
+    "styles.css": "text/css",
+}
+
+
+@app.get("/reader")
+def reader_page(request: Request):
+    redirect = gate(request)
+    if redirect:
+        return redirect
+    if not auth.is_admin(user_of(request)):
+        return RedirectResponse("/bid", status_code=302)
+    return FileResponse(READER_DIR / "index.html", media_type="text/html")
+
+
+@app.get("/reader/{asset}")
+def reader_asset(asset: str):
+    if asset not in READER_ASSETS:
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    return FileResponse(READER_DIR / asset, media_type=READER_ASSETS[asset])
+
+
+@app.post("/api/logs")
+def reader_logs(body: dict = Body(...)):
+    return {"ok": True}  # 리더 진단 로그는 수집하지 않음 (호환용 무동작 응답)
+
+
+@app.post("/api/translations/jobs")
+def reader_translation_job(request: Request, body: dict = Body(...)):
+    user = _admin_user(request)
+    if not user:
+        return JSONResponse({"error": "권한이 없습니다."}, status_code=403)
+    job_id = str(body.get("jobId", "")).strip()[:100]
+    paragraphs = body.get("paragraphs") or []
+    if not job_id or not isinstance(paragraphs, list) or not paragraphs:
+        return JSONResponse({"error": "잘못된 요청입니다."}, status_code=400)
+    try:
+        translated = summarize.gemini_translate_paragraphs(paragraphs[:300])
+        result = {"schemaVersion": 1, "jobId": job_id, "paragraphs": translated}
+        todos._request(
+            "POST", "reader_jobs",
+            json={"job_id": job_id, "email": user, "result": result},
+            headers={"Prefer": "resolution=merge-duplicates"},
+        )
+    except (summarize.SummarizeError, store.StoreError) as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return {"jobFile": f"{job_id}.json", "resultFile": f"{job_id}.json"}
+
+
+@app.get("/api/translations/results/{job_id}")
+def reader_translation_result(request: Request, job_id: str):
+    user = _admin_user(request)
+    if not user:
+        return JSONResponse({"error": "권한이 없습니다."}, status_code=403)
+    try:
+        rows = todos._request(
+            "GET", "reader_jobs",
+            params={"select": "result", "job_id": f"eq.{job_id}",
+                    "email": f"eq.{user}"},
+        ).json()
+    except store.StoreError as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    if not rows:
+        return JSONResponse({"error": "not ready"}, status_code=404)
+    return rows[0]["result"]
 
 
 @app.get("/pdf", response_class=HTMLResponse)

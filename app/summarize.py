@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import re
 import time
@@ -158,6 +159,55 @@ def gemini_summarize(text: str) -> str:
     except (KeyError, IndexError):
         err = data.get("error", {}).get("message", str(data)[:200])
         raise SummarizeError(f"요약 생성 실패: {err}")
+
+
+def gemini_translate_paragraphs(paragraphs: list[dict]) -> list[dict]:
+    """[{id, text}] 목록을 한국어로 번역해 같은 형식으로 반환 (Gemini JSON 모드)."""
+    key = gemini_key()
+    if not key:
+        raise SummarizeError("GEMINI_API_KEY가 설정되지 않았습니다.")
+
+    results: list[dict] = []
+    chunk: list[dict] = []
+    size = 0
+    chunks: list[list[dict]] = []
+    for p in paragraphs:
+        text = str(p.get("text", ""))
+        if size + len(text) > 20000 and chunk:
+            chunks.append(chunk)
+            chunk, size = [], 0
+        chunk.append({"id": p.get("id"), "text": text})
+        size += len(text)
+    if chunk:
+        chunks.append(chunk)
+
+    for part in chunks:
+        prompt = (
+            "다음 JSON 배열의 각 문단 text를 자연스러운 한국어로 번역하세요. "
+            "id는 그대로 유지하고, 결과를 [{\"id\":..., \"text\":\"번역문\"}] 형식의 "
+            "JSON 배열로만 반환하세요.\n\n" + json.dumps(part, ensure_ascii=False)
+        )
+        resp = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model()}:generateContent",
+            params={"key": key},
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"responseMimeType": "application/json"},
+            },
+            timeout=120,
+        )
+        data = resp.json()
+        try:
+            raw = data["candidates"][0]["content"]["parts"][0]["text"]
+            translated = json.loads(raw)
+        except (KeyError, IndexError, json.JSONDecodeError):
+            err = data.get("error", {}).get("message", str(data)[:200])
+            raise SummarizeError(f"번역 실패: {err}")
+        by_id = {t.get("id"): str(t.get("text", "")) for t in translated
+                 if isinstance(t, dict)}
+        for p in part:
+            results.append({"id": p["id"], "text": by_id.get(p["id"], p["text"])})
+    return results
 
 
 _CACHE: dict[str, tuple[float, str]] = {}

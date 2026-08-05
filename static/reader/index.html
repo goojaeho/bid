@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f4f1ea" />
+    <title>Librum - EPUB Reader</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+    <link rel="stylesheet" href="/reader/styles.css?v=20260726c" />
+    <script defer src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js"></script>
+    <script defer src="/reader/library.js?v=20260726c"></script>
+    <script defer src="/reader/app.js?v=20260726c"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="library" aria-label="책 탐색">
+        <div class="brand-row">
+          <a class="brand" href="./" aria-label="Librum 홈">LIBRUM</a>
+          <label class="open-file compact" for="epub-file" title="EPUB 열기" aria-label="EPUB 열기">+</label>
+        </div>
+
+        <label class="open-file full" for="epub-file">EPUB · CBZ 열기</label>
+        <input id="epub-file" type="file" accept=".epub,application/epub+zip,.cbz,.cbr,.zip" />
+
+        <section class="book-summary" id="book-summary" hidden>
+          <div class="cover-placeholder" id="cover-placeholder" aria-hidden="true">EPUB</div>
+          <div>
+            <p class="eyebrow">현재 읽는 책</p>
+            <h1 id="book-title">제목 없음</h1>
+            <p class="book-author" id="book-author"></p>
+          </div>
+        </section>
+
+        <nav class="toc" aria-label="목차">
+          <div class="toc-heading">
+            <span>목차</span>
+            <span id="chapter-count"></span>
+          </div>
+          <div id="toc-list" class="toc-list">
+            <p class="toc-empty">책을 열면 목차가 표시됩니다.</p>
+          </div>
+        </nav>
+
+        <p class="library-note">읽은 위치는 이 브라우저에 저장됩니다.</p>
+      </aside>
+
+      <main class="reader">
+        <header class="toolbar">
+          <div class="reading-meta">
+            <button type="button" class="icon-button library-toggle" id="show-library" title="내 서재" aria-label="내 서재" hidden>서재</button>
+            <span class="reader-label">읽는 중</span>
+            <span id="reader-title">EPUB Reader</span>
+          </div>
+
+          <div class="reading-controls" aria-label="읽기 설정">
+            <div class="segmented" aria-label="읽기 방식">
+              <button type="button" class="active" data-flow="paginated">페이지</button>
+              <button type="button" data-flow="scrolled-doc">스크롤</button>
+            </div>
+            <div class="divider" aria-hidden="true"></div>
+            <button type="button" class="icon-button" id="decrease-font" title="글자 작게" aria-label="글자 작게">A-</button>
+            <button type="button" class="font-value" id="reset-font" title="기본 글자 크기">100%</button>
+            <button type="button" class="icon-button" id="increase-font" title="글자 크게" aria-label="글자 크게">A+</button>
+            <div class="divider" aria-hidden="true"></div>
+            <button type="button" class="icon-button notes-toggle" id="toggle-notes" title="형광펜·메모" aria-label="형광펜·메모" hidden>노트</button>
+            <button type="button" class="icon-button translate-toggle" id="toggle-translation" title="원문/번역 보기" aria-label="원문/번역 보기" aria-pressed="false">번역</button>
+            <button type="button" class="icon-button settings-toggle" id="toggle-settings" title="읽기 설정" aria-label="읽기 설정" aria-expanded="false">&#9881;</button>
+
+            <div class="comic-controls" id="comic-controls" aria-label="만화 보기 설정" hidden>
+              <button type="button" class="icon-button" id="comic-fit" title="폭맞춤/화면맞춤 전환" aria-label="맞춤 방식 전환">폭맞춤</button>
+              <div class="divider" aria-hidden="true"></div>
+              <button type="button" class="icon-button" id="comic-zoom-out" title="축소" aria-label="축소">&minus;</button>
+              <button type="button" class="zoom-value" id="comic-zoom-value" title="확대 초기화">100%</button>
+              <button type="button" class="icon-button" id="comic-zoom-in" title="확대" aria-label="확대">&plus;</button>
+            </div>
+          </div>
+
+          <div class="reader-settings" id="reader-settings" hidden>
+            <div class="setting-row">
+              <label for="theme-select">테마</label>
+              <select id="theme-select">
+                <option value="paper">종이</option>
+                <option value="sepia">세피아</option>
+                <option value="night">야간</option>
+              </select>
+            </div>
+            <div class="setting-row">
+              <label for="font-select">글꼴</label>
+              <select id="font-select">
+                <option value="serif">명조</option>
+                <option value="sans">고딕</option>
+                <option value="system">시스템</option>
+              </select>
+            </div>
+            <div class="setting-row range-row">
+              <label for="font-size-range">글자 크기 <output id="font-size-range-value">100%</output></label>
+              <input id="font-size-range" type="range" min="75" max="160" step="5" value="100" />
+            </div>
+            <div class="setting-row range-row">
+              <label for="line-height-range">줄 간격 <output id="line-height-value">1.8</output></label>
+              <input id="line-height-range" type="range" min="1.4" max="2.4" step="0.1" value="1.8" />
+            </div>
+          </div>
+        </header>
+
+        <section class="reading-stage" id="reading-stage">
+          <div class="book-frame" id="book-frame">
+            <div class="empty-reader" id="empty-reader">
+              <div class="empty-mark" aria-hidden="true">EPUB</div>
+              <h2>읽을 책을 열어보세요.</h2>
+              <label class="open-file primary" for="epub-file">EPUB · CBZ 파일 선택</label>
+              <p>DRM이 없는 EPUB과 만화책(CBZ)을 지원합니다.</p>
+            </div>
+            <div id="viewer" class="viewer" aria-label="전자책 본문"></div>
+            <div id="comic-viewer" class="comic-viewer" aria-label="만화 페이지" hidden>
+              <img id="comic-page" class="comic-page" alt="만화 페이지" draggable="false" />
+            </div>
+            <div class="loading" id="loading" hidden>
+              <span class="loading-dot"></span>
+              <span id="loading-text">책을 여는 중...</span>
+            </div>
+          </div>
+          <button type="button" class="page-tap previous" id="stage-previous" title="이전 페이지" aria-label="이전 페이지" hidden><span aria-hidden="true">&lsaquo;</span></button>
+          <button type="button" class="page-tap next" id="stage-next" title="다음 페이지" aria-label="다음 페이지" hidden><span aria-hidden="true">&rsaquo;</span></button>
+
+          <div class="highlight-popup" id="highlight-popup" hidden role="toolbar" aria-label="형광펜 색상 선택">
+            <button type="button" class="swatch yellow" data-color="yellow" title="노랑" aria-label="노랑 형광펜"></button>
+            <button type="button" class="swatch green" data-color="green" title="초록" aria-label="초록 형광펜"></button>
+            <button type="button" class="swatch pink" data-color="pink" title="분홍" aria-label="분홍 형광펜"></button>
+            <button type="button" class="swatch blue" data-color="blue" title="파랑" aria-label="파랑 형광펜"></button>
+            <span class="popup-divider" aria-hidden="true"></span>
+            <button type="button" class="popup-action" id="popup-memo" title="메모 추가">메모</button>
+            <button type="button" class="popup-action remove" id="popup-remove" title="형광펜 지우기" hidden>지우기</button>
+          </div>
+
+          <section class="notes-view" id="notes-view" hidden aria-label="형광펜과 메모">
+            <div class="notes-view-header">
+              <h2>형광펜 · 메모</h2>
+              <button type="button" class="notes-close" id="notes-close" aria-label="닫기">&times;</button>
+            </div>
+            <div class="notes-list" id="notes-list"></div>
+          </section>
+
+          <section class="library-view" id="library-view" hidden aria-label="내 서재">
+            <div class="library-view-header">
+              <h2>내 서재</h2>
+              <label class="open-file compact-wide" for="epub-file">+ EPUB · CBZ 추가</label>
+            </div>
+            <div class="library-grid" id="library-grid"></div>
+          </section>
+
+          <section class="translation-view" id="translation-view" data-mobile-pane="source" hidden aria-label="원문/번역 보기">
+            <div class="translation-header">
+              <div class="translation-tabs" role="group" aria-label="원문/번역 전환">
+                <button type="button" id="tab-source" class="active" aria-pressed="true">원문</button>
+                <button type="button" id="tab-translation" aria-pressed="false">번역</button>
+              </div>
+              <p class="translation-status" id="translation-status"></p>
+            </div>
+            <div class="translation-panes">
+              <div class="translation-pane source" id="source-pane" aria-label="원문"></div>
+              <div class="translation-pane target" id="translation-pane" aria-label="번역문"></div>
+            </div>
+          </section>
+        </section>
+
+        <footer class="progress-bar">
+          <button type="button" class="nav-button" id="previous-page" title="이전" aria-label="이전">&larr;</button>
+          <div class="progress-track">
+            <input id="progress-range" type="range" min="0" max="100" value="0" step="0.1" aria-label="읽기 진행률" disabled />
+            <div class="progress-labels">
+              <span id="chapter-label">책을 열어 시작하세요</span>
+              <span id="progress-label">0%</span>
+            </div>
+          </div>
+          <button type="button" class="nav-button" id="next-page" title="다음" aria-label="다음">&rarr;</button>
+        </footer>
+      </main>
+    </div>
+  </body>
+</html>

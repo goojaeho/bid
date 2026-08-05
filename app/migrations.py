@@ -41,6 +41,14 @@ MIGRATIONS: list[tuple[int, str]] = [
     (4, """
         alter table todos add column if not exists parent_id bigint;
     """),
+    (5, """
+        create table if not exists reader_jobs (
+          job_id text primary key,
+          email text not null,
+          result jsonb not null,
+          created_at timestamptz not null default now()
+        );
+    """),
 ]
 
 _ran = False
