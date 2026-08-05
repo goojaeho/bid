@@ -38,6 +38,54 @@ class SummarizeError(Exception):
     pass
 
 
+def daily_limit() -> int:
+    try:
+        return int(os.environ.get("GEMINI_DAILY_LIMIT", "1000"))
+    except ValueError:
+        return 1000
+
+
+def _record_usage(kind: str, data: dict) -> None:
+    """Gemini 응답의 usageMetadata를 일별로 집계 (실패해도 무시)."""
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from app import todos
+
+        meta = data.get("usageMetadata") or {}
+        todos._request("POST", "rpc/bump_gemini_usage", json={
+            "d": datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat(),
+            "k": kind,
+            "t": int(meta.get("totalTokenCount") or 0),
+        })
+    except Exception:
+        pass
+
+
+def usage_today() -> dict:
+    """오늘 Gemini 사용량 합계 + 한도/잔여."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from app import todos
+
+    day = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+    requests_n = tokens_n = 0
+    try:
+        rows = todos._request(
+            "GET", "gemini_usage",
+            params={"select": "requests,tokens", "day": f"eq.{day}"},
+        ).json()
+        requests_n = sum(r.get("requests", 0) for r in rows)
+        tokens_n = sum(r.get("tokens", 0) for r in rows)
+    except Exception:
+        pass
+    limit = daily_limit()
+    return {"requests": requests_n, "tokens": tokens_n,
+            "limit": limit, "remaining": max(0, limit - requests_n)}
+
+
 def gemini_key() -> str | None:
     return os.environ.get("GEMINI_API_KEY", "").strip() or None
 
@@ -155,10 +203,12 @@ def gemini_summarize(text: str) -> str:
     )
     data = resp.json()
     try:
-        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        summary = data["candidates"][0]["content"]["parts"][0]["text"].strip()
     except (KeyError, IndexError):
         err = data.get("error", {}).get("message", str(data)[:200])
         raise SummarizeError(f"요약 생성 실패: {err}")
+    _record_usage("summary", data)
+    return summary
 
 
 def gemini_chat(messages: list[dict]) -> str:
@@ -179,10 +229,12 @@ def gemini_chat(messages: list[dict]) -> str:
     )
     data = resp.json()
     try:
-        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        reply = data["candidates"][0]["content"]["parts"][0]["text"].strip()
     except (KeyError, IndexError):
         err = data.get("error", {}).get("message", str(data)[:200])
         raise SummarizeError(f"응답 실패: {err}")
+    _record_usage("genie", data)
+    return reply
 
 
 def gemini_translate_paragraphs(paragraphs: list[dict]) -> list[dict]:
@@ -227,6 +279,7 @@ def gemini_translate_paragraphs(paragraphs: list[dict]) -> list[dict]:
         except (KeyError, IndexError, json.JSONDecodeError):
             err = data.get("error", {}).get("message", str(data)[:200])
             raise SummarizeError(f"번역 실패: {err}")
+        _record_usage("translate", data)
         by_id = {t.get("id"): str(t.get("text", "")) for t in translated
                  if isinstance(t, dict)}
         for p in part:

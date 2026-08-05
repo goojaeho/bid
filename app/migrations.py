@@ -49,6 +49,23 @@ MIGRATIONS: list[tuple[int, str]] = [
           created_at timestamptz not null default now()
         );
     """),
+    (6, """
+        create table if not exists gemini_usage (
+          day date not null,
+          kind text not null,
+          requests int not null default 0,
+          tokens bigint not null default 0,
+          primary key (day, kind)
+        );
+        create or replace function bump_gemini_usage(d date, k text, t bigint)
+        returns void language sql as $func$
+          insert into gemini_usage (day, kind, requests, tokens)
+          values (d, k, 1, t)
+          on conflict (day, kind) do update
+            set requests = gemini_usage.requests + 1,
+                tokens = gemini_usage.tokens + excluded.tokens;
+        $func$;
+    """),
 ]
 
 _ran = False

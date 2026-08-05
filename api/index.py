@@ -1297,6 +1297,7 @@ GENIE_PAGE = """<div class="card" style="display:flex;flex-direction:column;heig
     <input type="text" id="genie-input" placeholder="질문 입력 후 Enter" autocomplete="off" maxlength="4000">
     <button type="submit" id="genie-send">보내기</button>
   </form>
+  <div id="genie-usage" class="meta" style="margin:8px 2px 0">오늘 사용량 불러오는 중…</div>
 </div>
 <style>
   .genie-msg { max-width: 82%; padding: 10px 14px; border-radius: 14px;
@@ -1314,6 +1315,22 @@ GENIE_PAGE = """<div class="card" style="display:flex;flex-direction:column;heig
   var input = document.getElementById("genie-input");
   var sendBtn = document.getElementById("genie-send");
   var history = [];
+  var usageEl = document.getElementById("genie-usage");
+
+  function renderUsage(u) {
+    if (!u) return;
+    var pct = u.limit ? Math.min(100, Math.round(100 * u.requests / u.limit)) : 0;
+    usageEl.innerHTML = "오늘 Gemini 사용: <b>" + u.requests.toLocaleString() + "회</b> / "
+      + u.limit.toLocaleString() + "회 한도 · 남음 <b>" + u.remaining.toLocaleString() + "회</b>"
+      + " · 토큰 " + u.tokens.toLocaleString()
+      + ' <span style="display:inline-block;width:90px;height:6px;background:#e7e9ee;border-radius:3px;vertical-align:middle;margin-left:6px">'
+      + '<span style="display:block;width:' + pct + '%;height:6px;border-radius:3px;background:'
+      + (pct >= 90 ? "#d92d20" : pct >= 70 ? "#f79009" : "var(--accent)") + '"></span></span>'
+      + " (지니·AI요약·번역 합산, 자정 기준 근사치)";
+  }
+  fetch("/api/genie/usage").then(function (r) { return r.json(); })
+    .then(function (d) { if (d.ok) renderUsage(d.usage); })
+    .catch(function () {});
 
   function addMsg(text, cls) {
     var div = document.createElement("div");
@@ -1342,6 +1359,7 @@ GENIE_PAGE = """<div class="card" style="display:flex;flex-direction:column;heig
       if (!d.ok) { wait.textContent = "오류: " + (d.error || "실패"); return; }
       wait.classList.remove("loading");
       wait.textContent = d.reply;
+      renderUsage(d.usage);
       history.push({ role: "model", text: d.reply });
       log.scrollTop = log.scrollHeight;
       input.focus();
@@ -1376,9 +1394,17 @@ def genie_api(request: Request, body: dict = Body(...)):
     if not isinstance(messages, list) or not messages:
         return {"ok": False, "error": "질문이 비어 있습니다."}
     try:
-        return {"ok": True, "reply": summarize.gemini_chat(messages)}
+        reply = summarize.gemini_chat(messages)
+        return {"ok": True, "reply": reply, "usage": summarize.usage_today()}
     except summarize.SummarizeError as e:
         return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/genie/usage")
+def genie_usage(request: Request):
+    if not _owner_user(request):
+        return {"ok": False, "error": "권한이 없습니다."}
+    return {"ok": True, "usage": summarize.usage_today()}
 
 
 @app.get("/pdf", response_class=HTMLResponse)
