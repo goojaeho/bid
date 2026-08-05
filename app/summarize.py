@@ -161,6 +161,30 @@ def gemini_summarize(text: str) -> str:
         raise SummarizeError(f"요약 생성 실패: {err}")
 
 
+def gemini_chat(messages: list[dict]) -> str:
+    """멀티턴 채팅. messages: [{role: 'user'|'model', text: str}, ...] → 답변 텍스트."""
+    key = gemini_key()
+    if not key:
+        raise SummarizeError("GEMINI_API_KEY가 설정되지 않았습니다.")
+    contents = [
+        {"role": m["role"] if m.get("role") in ("user", "model") else "user",
+         "parts": [{"text": str(m.get("text", ""))[:8000]}]}
+        for m in messages[-20:]  # 최근 20턴만 유지
+    ]
+    resp = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model()}:generateContent",
+        params={"key": key},
+        json={"contents": contents},
+        timeout=60,
+    )
+    data = resp.json()
+    try:
+        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except (KeyError, IndexError):
+        err = data.get("error", {}).get("message", str(data)[:200])
+        raise SummarizeError(f"응답 실패: {err}")
+
+
 def gemini_translate_paragraphs(paragraphs: list[dict]) -> list[dict]:
     """[{id, text}] 목록을 한국어로 번역해 같은 형식으로 반환 (Gemini JSON 모드)."""
     key = gemini_key()

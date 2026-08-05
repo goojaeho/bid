@@ -25,6 +25,7 @@ ICONS = {
     "log-out": '<path d="m16 17 5-5-5-5" /><path d="M21 12H9" /><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />',
     "download": '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" x2="12" y1="15" y2="3" />',
     "book-open": '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" /><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />',
+    "sparkles": '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z" /><path d="M20 3v4" /><path d="M22 5h-4" /><path d="M4 17v2" /><path d="M5 18H3" />',
 }
 
 
@@ -40,7 +41,10 @@ PERSONAL_NAV = [
     ("/todo", "할 일", "list-checks"),
     ("/pdf", "PDF 압축", "download"),
 ]
-OWNER_NAV = [("/reader", "이북 리더", "book-open")]
+OWNER_NAV = [
+    ("/reader", "이북 리더", "book-open"),
+    ("/genie", "지니", "sparkles"),
+]
 PUBLIC_NAV = [
     ("/bid", "입찰공고", "gavel"),
     ("/gov", "정부과제", "landmark"),

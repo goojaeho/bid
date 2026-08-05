@@ -1289,6 +1289,98 @@ def reader_translation_result(request: Request, job_id: str):
     return rows[0]["result"]
 
 
+GENIE_PAGE = """<div class="card" style="display:flex;flex-direction:column;height:calc(100vh - 170px);min-height:520px">
+  <div id="genie-log" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding:4px 2px">
+    <div class="genie-msg ai">무엇이든 물어보세요! 🧞</div>
+  </div>
+  <form id="genie-form" class="row" style="margin-top:12px">
+    <input type="text" id="genie-input" placeholder="질문 입력 후 Enter" autocomplete="off" maxlength="4000">
+    <button type="submit" id="genie-send">보내기</button>
+  </form>
+</div>
+<style>
+  .genie-msg { max-width: 82%; padding: 10px 14px; border-radius: 14px;
+               font-size: 0.93rem; white-space: pre-wrap; word-break: break-word; }
+  .genie-msg.user { align-self: flex-end; background: var(--accent); color: #fff;
+                    border-bottom-right-radius: 4px; }
+  .genie-msg.ai { align-self: flex-start; background: #f1f3f7; color: var(--text);
+                  border-bottom-left-radius: 4px; }
+  .genie-msg.loading { color: var(--muted); }
+</style>
+<script>
+(function () {
+  var log = document.getElementById("genie-log");
+  var form = document.getElementById("genie-form");
+  var input = document.getElementById("genie-input");
+  var sendBtn = document.getElementById("genie-send");
+  var history = [];
+
+  function addMsg(text, cls) {
+    var div = document.createElement("div");
+    div.className = "genie-msg " + cls;
+    div.textContent = text;
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
+    return div;
+  }
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var q = input.value.trim();
+    if (!q || sendBtn.disabled) return;
+    input.value = "";
+    addMsg(q, "user");
+    history.push({ role: "user", text: q });
+    var wait = addMsg("생각 중…", "ai loading");
+    sendBtn.disabled = true;
+    fetch("/api/genie", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: history }),
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      sendBtn.disabled = false;
+      if (!d.ok) { wait.textContent = "오류: " + (d.error || "실패"); return; }
+      wait.classList.remove("loading");
+      wait.textContent = d.reply;
+      history.push({ role: "model", text: d.reply });
+      log.scrollTop = log.scrollHeight;
+      input.focus();
+    }).catch(function () {
+      sendBtn.disabled = false;
+      wait.textContent = "네트워크 오류 — 다시 시도해주세요.";
+    });
+  });
+  input.focus();
+})();
+</script>"""
+
+
+@app.get("/genie", response_class=HTMLResponse)
+def genie_page(request: Request):
+    redirect = gate(request)
+    if redirect:
+        return redirect
+    user = user_of(request)
+    if not auth.is_owner(user):
+        return RedirectResponse("/bid", status_code=302)
+    return layout("지니", icon("sparkles", 20) + " 지니", "/genie",
+                  GENIE_PAGE, user=user, admin=auth.is_admin(user))
+
+
+@app.post("/api/genie")
+def genie_api(request: Request, body: dict = Body(...)):
+    user = _owner_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    messages = body.get("messages") or []
+    if not isinstance(messages, list) or not messages:
+        return {"ok": False, "error": "질문이 비어 있습니다."}
+    try:
+        return {"ok": True, "reply": summarize.gemini_chat(messages)}
+    except summarize.SummarizeError as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/pdf", response_class=HTMLResponse)
 def pdf_page(request: Request):
     redirect = gate(request)
