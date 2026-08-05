@@ -25,7 +25,7 @@ from fastapi.responses import RedirectResponse
 
 from fastapi import Body
 
-from app import auth, gov_sources, kakao, migrations, store, summarize, todos
+from app import auth, genie, gov_sources, kakao, migrations, store, summarize, todos
 from app.g2b_client import CATEGORIES, G2BApiError, G2BClient
 from app.webui import icon, layout
 
@@ -1289,17 +1289,39 @@ def reader_translation_result(request: Request, job_id: str):
     return rows[0]["result"]
 
 
-GENIE_PAGE = """<div class="card" style="display:flex;flex-direction:column;height:calc(100vh - 170px);min-height:520px">
-  <div id="genie-log" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding:4px 2px">
-    <div class="genie-msg ai">무엇이든 물어보세요! 🧞</div>
+GENIE_PAGE = """<div class="genie-wrap">
+  <aside class="card genie-side">
+    <button type="button" id="genie-new" class="genie-new-btn">+ 새 대화</button>
+    <div id="genie-list" class="genie-list"></div>
+  </aside>
+  <div class="card genie-main">
+    <div id="genie-log" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding:4px 2px">
+      <div class="genie-msg ai">무엇이든 물어보세요! 🧞</div>
+    </div>
+    <form id="genie-form" class="row" style="margin-top:12px">
+      <input type="text" id="genie-input" placeholder="질문 입력 후 Enter" autocomplete="off" maxlength="4000">
+      <button type="submit" id="genie-send">보내기</button>
+    </form>
+    <div id="genie-usage" class="meta" style="margin:8px 2px 0">오늘 사용량 불러오는 중…</div>
   </div>
-  <form id="genie-form" class="row" style="margin-top:12px">
-    <input type="text" id="genie-input" placeholder="질문 입력 후 Enter" autocomplete="off" maxlength="4000">
-    <button type="submit" id="genie-send">보내기</button>
-  </form>
-  <div id="genie-usage" class="meta" style="margin:8px 2px 0">오늘 사용량 불러오는 중…</div>
 </div>
 <style>
+  .genie-wrap { display: flex; gap: 14px; height: calc(100vh - 170px); min-height: 520px; }
+  .genie-side { width: 210px; flex-shrink: 0; display: flex; flex-direction: column;
+                gap: 8px; overflow: hidden; }
+  .genie-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .genie-new-btn { width: 100%; padding: 8px; border: 1px dashed var(--accent);
+                   background: none; color: var(--accent); border-radius: 8px;
+                   cursor: pointer; font-size: 0.88rem; }
+  .genie-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+  .genie-item { display: flex; align-items: center; gap: 4px; padding: 7px 8px;
+                border-radius: 8px; cursor: pointer; font-size: 0.85rem; color: var(--text); }
+  .genie-item:hover { background: #f1f3f7; }
+  .genie-item.active { background: #e8edff; color: var(--accent); font-weight: 600; }
+  .genie-item .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .genie-item .del { border: none; background: none; color: var(--muted); cursor: pointer;
+                     padding: 2px 4px; border-radius: 4px; font-size: 0.85rem; line-height: 1; }
+  .genie-item .del:hover { color: #d92d20; background: #fee4e2; }
   .genie-msg { max-width: 82%; padding: 10px 14px; border-radius: 14px;
                font-size: 0.93rem; white-space: pre-wrap; word-break: break-word; }
   .genie-msg.user { align-self: flex-end; background: var(--accent); color: #fff;
@@ -1307,6 +1329,11 @@ GENIE_PAGE = """<div class="card" style="display:flex;flex-direction:column;heig
   .genie-msg.ai { align-self: flex-start; background: #f1f3f7; color: var(--text);
                   border-bottom-left-radius: 4px; }
   .genie-msg.loading { color: var(--muted); }
+  @media (max-width: 720px) {
+    .genie-wrap { flex-direction: column; height: auto; }
+    .genie-side { width: auto; max-height: 180px; }
+    .genie-main { min-height: 480px; }
+  }
 </style>
 <script>
 (function () {
@@ -1314,7 +1341,9 @@ GENIE_PAGE = """<div class="card" style="display:flex;flex-direction:column;heig
   var form = document.getElementById("genie-form");
   var input = document.getElementById("genie-input");
   var sendBtn = document.getElementById("genie-send");
-  var history = [];
+  var listEl = document.getElementById("genie-list");
+  var newBtn = document.getElementById("genie-new");
+  var chatId = null;
   var usageEl = document.getElementById("genie-usage");
 
   function renderUsage(u) {
@@ -1341,26 +1370,95 @@ GENIE_PAGE = """<div class="card" style="display:flex;flex-direction:column;heig
     return div;
   }
 
+  function resetLog() {
+    log.innerHTML = "";
+    addMsg("무엇이든 물어보세요! 🧞", "ai");
+  }
+
+  function markActive() {
+    var items = listEl.querySelectorAll(".genie-item");
+    for (var i = 0; i < items.length; i++) {
+      items[i].classList.toggle("active", items[i].dataset.id === String(chatId));
+    }
+  }
+
+  function loadChats() {
+    fetch("/api/genie/chats").then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) return;
+        listEl.innerHTML = "";
+        d.chats.forEach(function (c) {
+          var row = document.createElement("div");
+          row.className = "genie-item";
+          row.dataset.id = String(c.id);
+          var t = document.createElement("span");
+          t.className = "t";
+          t.textContent = c.title || "(제목 없음)";
+          var del = document.createElement("button");
+          del.type = "button";
+          del.className = "del";
+          del.textContent = "×";
+          del.title = "대화 삭제";
+          del.addEventListener("click", function (e) {
+            e.stopPropagation();
+            if (!confirm("이 대화를 삭제할까요?")) return;
+            fetch("/api/genie/chats/" + c.id + "/delete", { method: "POST" })
+              .then(function () {
+                if (String(chatId) === String(c.id)) { chatId = null; resetLog(); }
+                loadChats();
+              });
+          });
+          row.appendChild(t);
+          row.appendChild(del);
+          row.addEventListener("click", function () { openChat(c.id); });
+          listEl.appendChild(row);
+        });
+        markActive();
+      }).catch(function () {});
+  }
+
+  function openChat(id) {
+    fetch("/api/genie/chats/" + id).then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { alert(d.error || "대화를 불러오지 못했습니다."); return; }
+        chatId = d.chat.id;
+        log.innerHTML = "";
+        (d.chat.messages || []).forEach(function (m) {
+          addMsg(m.text, m.role === "user" ? "user" : "ai");
+        });
+        markActive();
+        input.focus();
+      }).catch(function () {});
+  }
+
+  newBtn.addEventListener("click", function () {
+    chatId = null;
+    resetLog();
+    markActive();
+    input.focus();
+  });
+
   form.addEventListener("submit", function (e) {
     e.preventDefault();
     var q = input.value.trim();
     if (!q || sendBtn.disabled) return;
     input.value = "";
     addMsg(q, "user");
-    history.push({ role: "user", text: q });
     var wait = addMsg("생각 중…", "ai loading");
     sendBtn.disabled = true;
     fetch("/api/genie", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: history }),
+      body: JSON.stringify({ chat_id: chatId, text: q }),
     }).then(function (r) { return r.json(); }).then(function (d) {
       sendBtn.disabled = false;
       if (!d.ok) { wait.textContent = "오류: " + (d.error || "실패"); return; }
       wait.classList.remove("loading");
       wait.textContent = d.reply;
       renderUsage(d.usage);
-      history.push({ role: "model", text: d.reply });
+      var isNew = !chatId;
+      if (d.chat_id) chatId = d.chat_id;
+      if (isNew) loadChats(); else markActive();
       log.scrollTop = log.scrollHeight;
       input.focus();
     }).catch(function () {
@@ -1368,6 +1466,7 @@ GENIE_PAGE = """<div class="card" style="display:flex;flex-direction:column;heig
       wait.textContent = "네트워크 오류 — 다시 시도해주세요.";
     });
   });
+  loadChats();
   input.focus();
 })();
 </script>"""
@@ -1390,13 +1489,65 @@ def genie_api(request: Request, body: dict = Body(...)):
     user = _owner_user(request)
     if not user:
         return {"ok": False, "error": "권한이 없습니다."}
-    messages = body.get("messages") or []
-    if not isinstance(messages, list) or not messages:
+    text = str(body.get("text") or "").strip()
+    if not text:
         return {"ok": False, "error": "질문이 비어 있습니다."}
+    chat_id = body.get("chat_id")
+    email = user
+    messages: list = []
+    if chat_id:
+        try:
+            messages = genie.get_chat(email, int(chat_id)).get("messages") or []
+        except (store.StoreError, ValueError) as e:
+            return {"ok": False, "error": str(e)}
+    messages.append({"role": "user", "text": text[:8000]})
     try:
         reply = summarize.gemini_chat(messages)
-        return {"ok": True, "reply": reply, "usage": summarize.usage_today()}
     except summarize.SummarizeError as e:
+        return {"ok": False, "error": str(e)}
+    messages.append({"role": "model", "text": reply})
+    try:  # 저장에 실패해도 답변은 표시한다
+        if chat_id:
+            genie.save_messages(email, int(chat_id), messages)
+        elif genie.enabled():
+            chat_id = genie.create_chat(email, text, messages)
+    except store.StoreError:
+        pass
+    return {"ok": True, "reply": reply, "chat_id": chat_id,
+            "usage": summarize.usage_today()}
+
+
+@app.get("/api/genie/chats")
+def genie_chats_api(request: Request):
+    user = _owner_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        return {"ok": True, "chats": genie.list_chats(user)}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/genie/chats/{chat_id}")
+def genie_chat_detail(request: Request, chat_id: int):
+    user = _owner_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        return {"ok": True, "chat": genie.get_chat(user, chat_id)}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/genie/chats/{chat_id}/delete")
+def genie_chat_delete(request: Request, chat_id: int):
+    user = _owner_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        genie.delete_chat(user, chat_id)
+        return {"ok": True}
+    except store.StoreError as e:
         return {"ok": False, "error": str(e)}
 
 

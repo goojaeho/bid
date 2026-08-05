@@ -9,7 +9,7 @@ os.environ["G2B_SERVICE_KEY"] = "dummy"
 from fastapi.testclient import TestClient
 
 import api.index as web
-from app import auth, todos
+from app import auth, genie, summarize, todos
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -169,6 +169,74 @@ class RoutingTest(unittest.TestCase):
                                  json={"due_date": "2026-08-02"})
         self.assertTrue(r.json()["ok"])
         self.assertEqual(captured[7], {"due_date": "2026-08-02"})
+
+
+class GenieChatTest(unittest.TestCase):
+    """지니 대화 저장 API — 소유자(첫 관리자) 전용."""
+
+    def setUp(self):
+        os.environ["GOOGLE_CLIENT_ID"] = "cid"
+        os.environ["GOOGLE_CLIENT_SECRET"] = "sec"
+        os.environ["ADMIN_EMAILS"] = "boss@company.com"
+        self.client = TestClient(web.app)
+        self.owner_cookie = {auth.COOKIE_NAME: auth.make_session("boss@company.com")}
+        self.user_cookie = {auth.COOKIE_NAME: auth.make_session("guest@gmail.com")}
+
+    def tearDown(self):
+        for k in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "ADMIN_EMAILS"):
+            os.environ.pop(k, None)
+
+    def test_non_owner_blocked(self):
+        for method, path in (("get", "/api/genie/chats"),
+                             ("get", "/api/genie/chats/1"),
+                             ("post", "/api/genie/chats/1/delete")):
+            r = getattr(self.client, method)(path, cookies=self.user_cookie)
+            self.assertFalse(r.json()["ok"], path)
+
+    def test_new_chat_creates_and_saves(self):
+        captured = {}
+        def fake_create(email, title, messages):
+            captured.update(email=email, title=title, messages=messages)
+            return 42
+        with patch.object(genie, "enabled", return_value=True), \
+             patch.object(genie, "create_chat", side_effect=fake_create), \
+             patch.object(summarize, "gemini_chat", return_value="안녕!"), \
+             patch.object(summarize, "usage_today",
+                          return_value={"requests": 1, "tokens": 10,
+                                        "limit": 1000, "remaining": 999}):
+            r = self.client.post("/api/genie", cookies=self.owner_cookie,
+                                 json={"text": "안녕"})
+        d = r.json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["chat_id"], 42)
+        self.assertEqual(d["reply"], "안녕!")
+        self.assertEqual(captured["title"], "안녕")
+        self.assertEqual(captured["messages"], [
+            {"role": "user", "text": "안녕"},
+            {"role": "model", "text": "안녕!"}])
+
+    def test_existing_chat_appends_context(self):
+        prior = [{"role": "user", "text": "질문1"},
+                 {"role": "model", "text": "답1"}]
+        sent, saved = [], {}
+        with patch.object(genie, "get_chat",
+                          return_value={"id": 7, "messages": list(prior)}), \
+             patch.object(genie, "save_messages",
+                          side_effect=lambda e, i, m: saved.update({i: m})), \
+             patch.object(summarize, "gemini_chat",
+                          side_effect=lambda m: (sent.extend(m), "답2")[1]), \
+             patch.object(summarize, "usage_today", return_value={}):
+            r = self.client.post("/api/genie", cookies=self.owner_cookie,
+                                 json={"chat_id": 7, "text": "질문2"})
+        self.assertTrue(r.json()["ok"])
+        self.assertEqual(sent[:2], prior)  # 이전 맥락이 Gemini에 전달됨
+        self.assertEqual(len(saved[7]), 4)
+        self.assertEqual(saved[7][-1], {"role": "model", "text": "답2"})
+
+    def test_empty_text_rejected(self):
+        r = self.client.post("/api/genie", cookies=self.owner_cookie,
+                             json={"text": "  "})
+        self.assertFalse(r.json()["ok"])
 
 
 if __name__ == "__main__":

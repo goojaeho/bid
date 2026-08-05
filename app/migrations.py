@@ -66,6 +66,18 @@ MIGRATIONS: list[tuple[int, str]] = [
                 tokens = gemini_usage.tokens + excluded.tokens;
         $func$;
     """),
+    (7, """
+        create table if not exists genie_chats (
+          id bigint generated always as identity primary key,
+          email text not null,
+          title text not null default '',
+          messages jsonb not null default '[]'::jsonb,
+          created_at timestamptz not null default now(),
+          updated_at timestamptz not null default now()
+        );
+        create index if not exists genie_chats_email_idx
+          on genie_chats (email, updated_at desc);
+    """),
 ]
 
 _ran = False
