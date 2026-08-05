@@ -338,24 +338,64 @@ function renderToc(items) {
     return;
   }
 
-  entries.forEach((item) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `toc-item depth-${Math.min(item.depth, 2)}`;
-    button.textContent = item.label.trim() || "제목 없음";
-    button.dataset.href = item.href;
-    button.addEventListener("click", () => {
-      if (translation.active) exitTranslationMode();
-      state.rendition.display(item.href);
+  const build = (list, depth, parent) => {
+    list.forEach((item) => {
+      const hasKids = Boolean(item.subitems && item.subitems.length);
+      const row = document.createElement("div");
+      row.className = "toc-row";
+
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `toc-item depth-${Math.min(depth, 2)}`;
+      button.textContent = (item.label || "").trim() || "제목 없음";
+      button.dataset.href = item.href;
+      button.addEventListener("click", () => {
+        if (translation.active) exitTranslationMode();
+        state.rendition.display(item.href);
+      });
+
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "toc-toggle" + (hasKids ? "" : " spacer");
+      toggle.textContent = hasKids ? "\u25B8" : "";
+      row.append(toggle, button);
+      parent.append(row);
+
+      if (hasKids) {
+        const kidBox = document.createElement("div");
+        kidBox.className = "toc-children";
+        kidBox.hidden = true;
+        toggle.setAttribute("aria-expanded", "false");
+        toggle.addEventListener("click", (e) => {
+          e.stopPropagation();
+          kidBox.hidden = !kidBox.hidden;
+          toggle.textContent = kidBox.hidden ? "\u25B8" : "\u25BE";
+          toggle.setAttribute("aria-expanded", String(!kidBox.hidden));
+        });
+        parent.append(kidBox);
+        build(item.subitems, depth + 1, kidBox);
+      }
     });
-    ui.toc.append(button);
-  });
+  };
+  build(items, 0, ui.toc);
 }
 
 function nearestChapter(href) {
   const items = [...ui.toc.querySelectorAll(".toc-item")];
   const matchingItem = items.find((item) => href && href.includes(item.dataset.href.split("#")[0]));
   items.forEach((item) => item.classList.toggle("active", item === matchingItem));
+  // 현재 읽는 항목이 접힌 하위 목차 안에 있으면 상위를 자동으로 펼친다
+  let box = matchingItem?.closest(".toc-children");
+  while (box) {
+    box.hidden = false;
+    const row = box.previousElementSibling;
+    const toggle = row?.querySelector(".toc-toggle");
+    if (toggle && !toggle.classList.contains("spacer")) {
+      toggle.textContent = "\u25BE";
+      toggle.setAttribute("aria-expanded", "true");
+    }
+    box = box.parentElement?.closest(".toc-children");
+  }
   return matchingItem?.textContent || "읽는 중";
 }
 

@@ -368,3 +368,12 @@ body.theme-night .loading { background: rgba(25, 35, 33, 0.88); color: #dce7e1; 
   .popup-action { min-height: 32px; font-size: 13.5px; }
   .note-item { padding: 14px 44px 14px 16px; }
 }
+
+.toc-row { display: flex; align-items: stretch; }
+.toc-row .toc-item { flex: 1; min-width: 0; }
+.toc-toggle {
+  flex: 0 0 18px; background: none; border: none; padding: 0;
+  color: var(--muted); cursor: pointer; font-size: 10px; line-height: 1;
+}
+.toc-toggle:hover { color: inherit; }
+.toc-toggle.spacer { visibility: hidden; cursor: default; }
