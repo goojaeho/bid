@@ -1207,8 +1207,23 @@ READER_ASSETS = {
 }
 
 
-@app.get("/reader")
+@app.get("/reader", response_class=HTMLResponse)
 def reader_page(request: Request):
+    redirect = gate(request)
+    if redirect:
+        return redirect
+    user = user_of(request)
+    if not auth.is_owner(user):
+        return RedirectResponse("/bid", status_code=302)
+    content = ('<iframe src="/reader/app" title="이북 리더" '
+               'style="width:100%;height:calc(100vh - 150px);min-height:620px;'
+               'border:1px solid var(--line);border-radius:12px;background:#fff"></iframe>')
+    return layout("이북 리더", icon("book-open", 20) + " 이북 리더", "/reader",
+                  content, user=user, admin=auth.is_admin(user))
+
+
+@app.get("/reader/app")
+def reader_app(request: Request):
     redirect = gate(request)
     if redirect:
         return redirect
