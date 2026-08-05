@@ -39,8 +39,8 @@ PERSONAL_NAV = [
     ("/", "메인", "house"),
     ("/todo", "할 일", "list-checks"),
     ("/pdf", "PDF 압축", "download"),
-    ("/reader", "이북 리더", "book-open"),
 ]
+OWNER_NAV = [("/reader", "이북 리더", "book-open")]
 PUBLIC_NAV = [
     ("/bid", "입찰공고", "gavel"),
     ("/gov", "정부과제", "landmark"),
@@ -514,8 +514,10 @@ document.querySelectorAll("table th").forEach(function (th, idx) {
 
 def layout(title: str, heading: str, active_path: str, content: str,
            user: str | None = None, admin: bool = False) -> str:
-    from app import store
-    items = (PERSONAL_NAV if admin else []) + PUBLIC_NAV
+    from app import auth, store
+    items = ((PERSONAL_NAV if admin else [])
+             + (OWNER_NAV if auth.is_owner(user) else [])
+             + PUBLIC_NAV)
     parts = []
     for path, label, icon_name in items:
         cls = ' class="active"' if path == active_path else ""

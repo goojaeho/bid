@@ -126,6 +126,17 @@ def is_admin(email: str | None) -> bool:
     return email.lower() in admins
 
 
+def is_owner(email: str | None) -> bool:
+    """서비스 소유자 1인 판별. OWNER_EMAIL 미설정 시 ADMIN_EMAILS의 첫 번째 계정."""
+    if not email:
+        return False
+    owner = os.environ.get("OWNER_EMAIL", "").strip().lower()
+    if owner:
+        return email.lower() == owner
+    admins = [e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()]
+    return bool(admins) and email.lower() == admins[0]
+
+
 def allowed(email: str) -> bool:
     emails = [e.strip().lower() for e in os.environ.get("ALLOWED_EMAILS", "").split(",") if e.strip()]
     domain = os.environ.get("ALLOWED_DOMAIN", "").strip().lower().lstrip("@")

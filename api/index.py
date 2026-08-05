@@ -1212,7 +1212,7 @@ def reader_page(request: Request):
     redirect = gate(request)
     if redirect:
         return redirect
-    if not auth.is_admin(user_of(request)):
+    if not auth.is_owner(user_of(request)):
         return RedirectResponse("/bid", status_code=302)
     return FileResponse(READER_DIR / "index.html", media_type="text/html")
 
@@ -1229,9 +1229,14 @@ def reader_logs(body: dict = Body(...)):
     return {"ok": True}  # 리더 진단 로그는 수집하지 않음 (호환용 무동작 응답)
 
 
+def _owner_user(request: Request) -> str | None:
+    user = user_of(request)
+    return user if (user and auth.is_owner(user)) else None
+
+
 @app.post("/api/translations/jobs")
 def reader_translation_job(request: Request, body: dict = Body(...)):
-    user = _admin_user(request)
+    user = _owner_user(request)
     if not user:
         return JSONResponse({"error": "권한이 없습니다."}, status_code=403)
     job_id = str(body.get("jobId", "")).strip()[:100]
@@ -1253,7 +1258,7 @@ def reader_translation_job(request: Request, body: dict = Body(...)):
 
 @app.get("/api/translations/results/{job_id}")
 def reader_translation_result(request: Request, job_id: str):
-    user = _admin_user(request)
+    user = _owner_user(request)
     if not user:
         return JSONResponse({"error": "권한이 없습니다."}, status_code=403)
     try:
