@@ -78,6 +78,18 @@ MIGRATIONS: list[tuple[int, str]] = [
         create index if not exists genie_chats_email_idx
           on genie_chats (email, updated_at desc);
     """),
+    (8, """
+        create table if not exists quick_searches (
+          id bigint generated always as identity primary key,
+          email text not null,
+          page text not null,
+          label text not null,
+          params jsonb not null default '{}'::jsonb,
+          created_at timestamptz not null default now()
+        );
+        create index if not exists quick_searches_email_idx
+          on quick_searches (email, page, created_at);
+    """),
 ]
 
 _ran = False

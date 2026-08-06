@@ -25,7 +25,8 @@ from fastapi.responses import RedirectResponse
 
 from fastapi import Body
 
-from app import auth, genie, gov_sources, kakao, migrations, store, summarize, todos
+from app import (auth, genie, gov_sources, kakao, migrations, searches, store,
+                 summarize, todos)
 from app.g2b_client import CATEGORIES, G2BApiError, G2BClient
 from app.webui import icon, layout
 
@@ -105,6 +106,72 @@ RECOMMEND_GOV = os.environ.get(
     "기술개발,R&D,글로벌,수출,투자,IR,AI,사업화,소프트웨어",
 )
 
+# 사용자별 빠른 검색: 칩 목록 로드 + 현재 조건 저장 (bid/gov 공용)
+QUICK_JS = """<script>
+(function () {
+  var slot = document.getElementById("quick-user");
+  var saveBtn = document.getElementById("quick-save");
+  if (!slot || !saveBtn) return;
+  var page = slot.dataset.page;
+
+  function load() {
+    fetch("/api/searches?page=" + page).then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) return;
+        slot.innerHTML = "";
+        d.items.forEach(function (it) {
+          var a = document.createElement("a");
+          a.className = "chip chip-user";
+          a.href = "/" + page + "?" + new URLSearchParams(it.params).toString();
+          a.title = Object.keys(it.params).map(function (k) {
+            return k + "=" + it.params[k];
+          }).join(", ");
+          var t = document.createElement("span");
+          t.textContent = it.label;
+          a.appendChild(t);
+          var x = document.createElement("button");
+          x.type = "button";
+          x.className = "chip-x";
+          x.textContent = "\\u00d7";
+          x.title = "삭제";
+          x.addEventListener("click", function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!confirm('"' + it.label + '" 빠른 검색을 삭제할까요?')) return;
+            fetch("/api/searches/" + it.id + "/delete", { method: "POST" })
+              .then(load);
+          });
+          a.appendChild(x);
+          slot.appendChild(a);
+        });
+      }).catch(function () {});
+  }
+
+  saveBtn.addEventListener("click", function () {
+    var params = {};
+    new FormData(saveBtn.closest("form")).forEach(function (v, k) {
+      if (String(v).trim() !== "") params[k] = String(v);
+    });
+    if (!params.q && !params.org && !params.src && !params.region) {
+      alert("저장할 검색 조건(키워드·기관 등)을 먼저 입력해주세요.");
+      return;
+    }
+    var label = prompt("빠른 검색 이름을 입력하세요", params.q || "");
+    if (!label || !label.trim()) return;
+    fetch("/api/searches", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ page: page, label: label.trim(), params: params }),
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.ok) { alert(d.error || "저장에 실패했습니다."); return; }
+      load();
+    }).catch(function () { alert("네트워크 오류 — 다시 시도해주세요."); });
+  });
+
+  load();
+})();
+</script>"""
+
 
 def parse_query(q: str) -> list[list[str]]:
     """검색어 파싱: 쉼표 = OR, 공백 = AND.
@@ -147,6 +214,9 @@ def render(params: dict, body: str) -> str:
     <span class="quick-label">빠른 검색</span>
     <a class="chip" href="/bid?q={quote(RECOMMEND_BID)}&days=7"
        title="추천 키워드: {esc(RECOMMEND_BID)}">{icon("star", 13)} {esc(RECOMMEND_BID.replace(",", " · "))}</a>
+    <span id="quick-user" data-page="bid" class="quick-slot"></span>
+    <button type="button" id="quick-save" class="chip chip-save"
+            title="현재 검색 조건을 빠른 검색으로 저장">{icon("plus", 13)} 저장</button>
   </div>
   <div class="row">
     <input type="text" name="q" value="{esc(params['q'])}" placeholder="키워드 — 쉼표(,)는 또는, 공백은 그리고 (예: 소프트웨어,홍보)">
@@ -161,7 +231,7 @@ def render(params: dict, body: str) -> str:
     <input type="number" name="max_amt" value="{max_amt}" placeholder="최대금액(만원)" min="0" class="amt">
     <select name="sort">{sort_options}</select>
   </div>
-</form>"""
+</form>""" + QUICK_JS
     return layout("나라장터 입찰공고 검색", "입찰공고 검색", "/bid", form + body,
                   user=params.get("_user"),
                   admin=auth.is_admin(params.get("_user")))
@@ -404,6 +474,9 @@ def _gov_form(params: dict) -> str:
     <span class="quick-label">빠른 검색</span>
     <a class="chip" href="/gov?q={quote(RECOMMEND_GOV)}&state=ing&sort=deadline"
        title="추천 키워드: {esc(RECOMMEND_GOV)}">{icon("star", 13)} {esc(RECOMMEND_GOV.replace(",", " · "))}</a>
+    <span id="quick-user" data-page="gov" class="quick-slot"></span>
+    <button type="button" id="quick-save" class="chip chip-save"
+            title="현재 검색 조건을 빠른 검색으로 저장">{icon("plus", 13)} 저장</button>
   </div>
   <div class="row">
     <input type="text" name="q" value="{esc(params['q'])}" placeholder="키워드 — 쉼표(,)는 또는, 공백은 그리고 (예: AI,콘텐츠)">
@@ -415,7 +488,7 @@ def _gov_form(params: dict) -> str:
     <select name="sort">{sort_options}</select>
     <button type="submit">검색</button>
   </div>
-</form>"""
+</form>""" + QUICK_JS
 
 
 def _gov_rows(items: list[dict]) -> str:
@@ -1684,6 +1757,43 @@ def set_favs_api(request: Request, favs: dict = Body(...)):
         return {"ok": False, "error": "서버 저장소가 설정되지 않았습니다."}
     try:
         store.set_favs(email, favs)
+        return {"ok": True}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/searches")
+def list_searches_api(request: Request, page: str = Query("bid")):
+    email = user_of(request)
+    if not email:
+        return {"ok": False, "error": "로그인이 필요합니다."}
+    try:
+        return {"ok": True, "items": searches.list_searches(email, page)}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/searches")
+def add_search_api(request: Request, body: dict = Body(...)):
+    email = user_of(request)
+    if not email:
+        return {"ok": False, "error": "로그인이 필요합니다."}
+    try:
+        item = searches.add_search(
+            email, str(body.get("page") or ""), str(body.get("label") or ""),
+            body.get("params") or {})
+        return {"ok": True, "item": item}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/searches/{search_id}/delete")
+def delete_search_api(request: Request, search_id: int):
+    email = user_of(request)
+    if not email:
+        return {"ok": False, "error": "로그인이 필요합니다."}
+    try:
+        searches.delete_search(email, search_id)
         return {"ok": True}
     except store.StoreError as e:
         return {"ok": False, "error": str(e)}

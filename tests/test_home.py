@@ -9,7 +9,8 @@ os.environ["G2B_SERVICE_KEY"] = "dummy"
 from fastapi.testclient import TestClient
 
 import api.index as web
-from app import auth, genie, summarize, todos
+from app import auth, genie, searches, summarize, todos
+from app.store import StoreError
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -237,6 +238,69 @@ class GenieChatTest(unittest.TestCase):
         r = self.client.post("/api/genie", cookies=self.owner_cookie,
                              json={"text": "  "})
         self.assertFalse(r.json()["ok"])
+
+
+class QuickSearchTest(unittest.TestCase):
+    """사용자별 빠른 검색 저장 — 로그인한 모든 사용자."""
+
+    def setUp(self):
+        os.environ["GOOGLE_CLIENT_ID"] = "cid"
+        os.environ["GOOGLE_CLIENT_SECRET"] = "sec"
+        self.client = TestClient(web.app)
+        self.cookie = {auth.COOKIE_NAME: auth.make_session("guest@gmail.com")}
+
+    def tearDown(self):
+        for k in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"):
+            os.environ.pop(k, None)
+
+    def test_anonymous_blocked(self):
+        for method, path in (("get", "/api/searches"),
+                             ("post", "/api/searches"),
+                             ("post", "/api/searches/1/delete")):
+            r = getattr(self.client, method)(
+                path, **({"json": {}} if method == "post" and path == "/api/searches" else {}))
+            self.assertFalse(r.json()["ok"], path)
+
+    def test_add_search_validates_and_cleans(self):
+        sent = {}
+        def fake_request(method, path, **kw):
+            sent.update(method=method, path=path, **kw)
+            class R:
+                def json(self):
+                    if method == "GET":
+                        return []
+                    return [{"id": 5, "label": "SW입찰", "params": {"q": "소프트웨어"}}]
+            return R()
+        with patch.object(todos, "_request", side_effect=fake_request):
+            item = searches.add_search(
+                "guest@gmail.com", "bid", " SW입찰 ",
+                {"q": "소프트웨어", "days": "7", "bogus": "x", "org": "  "})
+        self.assertEqual(item["id"], 5)
+        self.assertEqual(sent["json"]["label"], "SW입찰")
+        # 허용 파라미터만 저장, 빈 값·미지원 키 제거
+        self.assertEqual(sent["json"]["params"], {"q": "소프트웨어", "days": "7"})
+
+    def test_add_search_rejects_bad_input(self):
+        with patch.object(todos, "_request"):
+            with self.assertRaises(StoreError):
+                searches.add_search("e@x.com", "bid", "  ", {"q": "a"})
+            with self.assertRaises(StoreError):
+                searches.add_search("e@x.com", "nope", "이름", {"q": "a"})
+            with self.assertRaises(StoreError):
+                searches.add_search("e@x.com", "gov", "이름", {"bogus": "x"})
+
+    def test_api_wiring(self):
+        with patch.object(searches, "list_searches",
+                          return_value=[{"id": 1, "label": "AI", "params": {"q": "AI"}}]):
+            r = self.client.get("/api/searches?page=gov", cookies=self.cookie)
+        self.assertEqual(r.json(), {"ok": True, "items": [
+            {"id": 1, "label": "AI", "params": {"q": "AI"}}]})
+        captured = {}
+        with patch.object(searches, "delete_search",
+                          side_effect=lambda e, i: captured.update(email=e, sid=i)):
+            r = self.client.post("/api/searches/7/delete", cookies=self.cookie)
+        self.assertTrue(r.json()["ok"])
+        self.assertEqual(captured, {"email": "guest@gmail.com", "sid": 7})
 
 
 if __name__ == "__main__":

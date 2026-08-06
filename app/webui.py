@@ -140,6 +140,18 @@ BASE = """<!doctype html>
     font-size: 0.85rem; border: 1px solid #dbe3ff;
   }
   .chip:hover { background: #e2e9ff; text-decoration: none; }
+  .quick-slot { display: inline-flex; flex-wrap: wrap; gap: 8px; }
+  .chip-user { display: inline-flex; align-items: center; gap: 4px;
+               background: #f0fdf9; color: #0e9384; border-color: #c9f2e9; }
+  .chip-user:hover { background: #e2f8f1; }
+  .chip-x { border: none; background: none; color: #0e9384; opacity: 0.6;
+            cursor: pointer; padding: 0 2px; font-size: 0.95rem; line-height: 1;
+            font-weight: 700; }
+  .chip-x:hover { opacity: 1; color: #d92d20; background: none; }
+  .chip-save { display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+               background: none; border: 1px dashed #b6c3e8; color: var(--muted);
+               font-weight: 700; font-size: 0.85rem; padding: 7px 14px; }
+  .chip-save:hover { color: var(--accent); border-color: var(--accent); background: #f6f8ff; }
 
   .meta { color: var(--muted); font-size: 0.85rem; margin: 4px 2px 10px; }
   .error {
