@@ -1,0 +1,325 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>오늘의 급등주 TOP 10</title>
+<style>
+  /* ---------- 토큰 ---------- */
+  :root{
+    --bg:#f4f6f9;
+    --surface:#ffffff;
+    --surface-2:#eef1f6;
+    --ink:#16202e;
+    --ink-2:#51607280;
+    --muted:#5d6a7c;
+    --line:#e2e7ee;
+    --up:#e5484d;          /* 한국 관례: 상승 = 빨강 */
+    --up-soft:#e5484d14;
+    --down:#3566d6;        /* 하락 = 파랑 */
+    --down-soft:#3566d614;
+    --chip:#16202e;
+    --chip-ink:#f4f6f9;
+    --gold:#c9a24b;
+    --shadow:0 1px 2px rgba(22,32,46,.05), 0 8px 24px rgba(22,32,46,.06);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0f141c;
+      --surface:#171e29;
+      --surface-2:#1f2836;
+      --ink:#e8ecf2;
+      --muted:#93a0b1;
+      --line:#28323f;
+      --up:#ff6b6f;
+      --up-soft:#ff6b6f1c;
+      --down:#6f97ff;
+      --down-soft:#6f97ff1c;
+      --chip:#e8ecf2;
+      --chip-ink:#0f141c;
+      --gold:#d9b969;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0f141c;
+    --surface:#171e29;
+    --surface-2:#1f2836;
+    --ink:#e8ecf2;
+    --muted:#93a0b1;
+    --line:#28323f;
+    --up:#ff6b6f;
+    --up-soft:#ff6b6f1c;
+    --down:#6f97ff;
+    --down-soft:#6f97ff1c;
+    --chip:#e8ecf2;
+    --chip-ink:#0f141c;
+    --gold:#d9b969;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'Apple SD Gothic Neo','Pretendard','Noto Sans KR','Malgun Gothic',system-ui,sans-serif;
+    line-height:1.5;
+    min-height:100vh;
+  }
+  .wrap{max-width:960px;margin:0 auto;padding:0 20px 64px}
+
+  /* ---------- 헤더 ---------- */
+  header{
+    display:flex;align-items:center;justify-content:space-between;gap:16px;
+    padding:20px 0;flex-wrap:wrap;
+  }
+  .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:17px;letter-spacing:-.01em}
+  .brand .mark{
+    width:28px;height:28px;border-radius:8px;background:var(--chip);color:var(--chip-ink);
+    display:grid;place-items:center;font-size:15px;font-weight:800;
+  }
+  .indices{display:flex;gap:8px;flex-wrap:wrap}
+  .idx{
+    display:flex;align-items:baseline;gap:8px;
+    background:var(--surface);border:1px solid var(--line);border-radius:999px;
+    padding:6px 14px;font-size:13px;box-shadow:var(--shadow);
+  }
+  .idx b{font-weight:700}
+  .idx .num{font-variant-numeric:tabular-nums}
+
+  /* ---------- 히어로 ---------- */
+  .hero{padding:28px 0 24px}
+  .eyebrow{
+    display:inline-flex;align-items:center;gap:6px;
+    font-size:12px;font-weight:700;letter-spacing:.08em;color:var(--muted);
+    text-transform:uppercase;margin-bottom:12px;
+  }
+  .eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--up);animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  @media (prefers-reduced-motion: reduce){
+    .eyebrow .dot{animation:none}
+    .card,.row{animation:none !important}
+  }
+  h1{
+    font-size:clamp(28px,5vw,42px);font-weight:800;letter-spacing:-.03em;
+    line-height:1.2;text-wrap:balance;
+  }
+  h1 .up-word{color:var(--up)}
+  .hero p{color:var(--muted);margin-top:10px;font-size:15px}
+  .demo-badge{
+    display:inline-block;margin-top:14px;padding:4px 10px;border-radius:6px;
+    background:var(--surface-2);color:var(--muted);font-size:12px;font-weight:600;
+    border:1px dashed var(--line);
+  }
+
+  /* ---------- 탭 ---------- */
+  .tabs{display:flex;gap:6px;margin:22px 0 16px}
+  .tab{
+    border:1px solid var(--line);background:var(--surface);color:var(--muted);
+    padding:7px 16px;border-radius:999px;font-size:13.5px;font-weight:600;
+    cursor:pointer;font-family:inherit;transition:background .15s,color .15s;
+  }
+  .tab:focus-visible{outline:2px solid var(--up);outline-offset:2px}
+  .tab.active{background:var(--chip);color:var(--chip-ink);border-color:var(--chip)}
+
+  /* ---------- TOP 3 카드 ---------- */
+  .podium{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  @media (max-width:720px){.podium{grid-template-columns:1fr}}
+  .card{
+    background:var(--surface);border:1px solid var(--line);border-radius:16px;
+    padding:18px 18px 14px;box-shadow:var(--shadow);position:relative;
+    animation:rise .5s ease both;
+  }
+  .card:nth-child(2){animation-delay:.07s}
+  .card:nth-child(3){animation-delay:.14s}
+  @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  .rank-medal{
+    position:absolute;top:-10px;left:14px;
+    background:var(--chip);color:var(--chip-ink);
+    font-size:12px;font-weight:800;padding:3px 10px;border-radius:999px;
+  }
+  .card.first .rank-medal{background:var(--gold);color:#231b06}
+  .card .head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-top:6px}
+  .stock-name{font-size:17px;font-weight:800;letter-spacing:-.01em}
+  .stock-meta{font-size:12px;color:var(--muted);margin-top:2px;font-variant-numeric:tabular-nums}
+  .mkt{
+    font-size:11px;font-weight:700;padding:2px 8px;border-radius:5px;
+    background:var(--surface-2);color:var(--muted);white-space:nowrap;
+  }
+  .limit-up{
+    font-size:11px;font-weight:800;padding:2px 8px;border-radius:5px;
+    background:var(--up);color:#fff;white-space:nowrap;
+  }
+  .card .pct{
+    font-size:30px;font-weight:800;color:var(--up);letter-spacing:-.02em;
+    margin-top:12px;font-variant-numeric:tabular-nums;
+  }
+  .card .price-line{
+    display:flex;gap:10px;font-size:13.5px;color:var(--muted);
+    font-variant-numeric:tabular-nums;margin-top:2px;
+  }
+  .card .price-line b{color:var(--ink);font-weight:700}
+  .card .chg{color:var(--up);font-weight:600}
+  .spark{width:100%;height:44px;margin-top:12px;display:block}
+  .card .vol{font-size:12px;color:var(--muted);margin-top:8px;font-variant-numeric:tabular-nums}
+
+  /* ---------- 4위 이하 리스트 ---------- */
+  .list{
+    margin-top:16px;background:var(--surface);border:1px solid var(--line);
+    border-radius:16px;box-shadow:var(--shadow);overflow:hidden;
+  }
+  .list-head,.row{
+    display:grid;
+    grid-template-columns:44px 1.6fr 1fr 1fr 1.1fr;
+    gap:8px;align-items:center;padding:12px 18px;
+  }
+  .list-head{
+    font-size:12px;font-weight:700;color:var(--muted);
+    border-bottom:1px solid var(--line);background:var(--surface-2);
+  }
+  .row{border-bottom:1px solid var(--line);animation:rise .4s ease both}
+  .row:last-child{border-bottom:none}
+  .row .rk{font-weight:800;color:var(--muted);font-variant-numeric:tabular-nums}
+  .row .nm{font-weight:700;font-size:14.5px;display:flex;align-items:center;gap:8px;min-width:0}
+  .row .nm .cd{font-weight:400;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .row .pr{font-variant-numeric:tabular-nums;font-size:14px;text-align:right}
+  .row .pc{text-align:right}
+  .pct-pill{
+    display:inline-block;min-width:74px;text-align:right;
+    background:var(--up-soft);color:var(--up);font-weight:800;
+    padding:4px 10px;border-radius:8px;font-size:13.5px;font-variant-numeric:tabular-nums;
+  }
+  .row .vl{font-variant-numeric:tabular-nums;font-size:13px;color:var(--muted);text-align:right}
+  @media (max-width:640px){
+    .list-head,.row{grid-template-columns:34px 1.5fr 1fr 1fr;padding:12px 14px}
+    .hd-vl,.row .vl{display:none}
+  }
+
+  footer{margin-top:28px;font-size:12px;color:var(--muted);line-height:1.7}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="brand"><span class="mark">↑</span>오늘의 급등주</div>
+    <div class="indices">
+      <span class="idx"><b>코스피</b> <span class="num">2,847.63</span> <span class="num" style="color:var(--up)">+1.24%</span></span>
+      <span class="idx"><b>코스닥</b> <span class="num">851.20</span> <span class="num" style="color:var(--up)">+2.08%</span></span>
+    </div>
+  </header>
+
+  <section class="hero">
+    <div class="eyebrow"><span class="dot"></span>2026.08.08 (금) 15:30 장 마감 기준</div>
+    <h1>오늘 가장 많이 <span class="up-word">오른</span> 주식 TOP 10</h1>
+    <p>코스피·코스닥 전 종목 중 상승률 상위 10개 종목을 한눈에 보여드립니다.</p>
+    <span class="demo-badge">⚠ 가상 데모 데이터 — 실제 시세가 아닙니다</span>
+  </section>
+
+  <div class="tabs" role="tablist" aria-label="시장 선택">
+    <button class="tab active" data-mkt="전체" role="tab" aria-selected="true">전체</button>
+    <button class="tab" data-mkt="코스피" role="tab" aria-selected="false">코스피</button>
+    <button class="tab" data-mkt="코스닥" role="tab" aria-selected="false">코스닥</button>
+  </div>
+
+  <section class="podium" id="podium" aria-label="상승률 1~3위"></section>
+
+  <section class="list" aria-label="상승률 4위 이하">
+    <div class="list-head">
+      <span>순위</span><span>종목명</span><span style="text-align:right">현재가</span>
+      <span style="text-align:right">등락률</span><span class="hd-vl" style="text-align:right">거래대금</span>
+    </div>
+    <div id="rows"></div>
+  </section>
+
+  <footer>
+    본 페이지는 HTML5 데모이며 모든 종목명·시세·거래대금은 가상으로 생성된 예시입니다.<br>
+    실제 투자 판단의 근거로 사용할 수 없습니다.
+  </footer>
+</div>
+
+<script>
+  // 가상 데모 데이터 (실존 기업 아님)
+  const STOCKS = [
+    {name:"한빛반도체",   code:"421870", mkt:"코스닥", price:18720,  pct:29.97, limit:true,  vol:"4,812억", spark:[3,3,4,5,7,8,10,13,15,15]},
+    {name:"미래셀바이오",  code:"318260", mkt:"코스닥", price:45150,  pct:24.38, limit:false, vol:"3,105억", spark:[4,5,5,7,6,9,11,12,14,15]},
+    {name:"대양이차전지",  code:"095720", mkt:"코스피", price:112500, pct:18.42, limit:false, vol:"6,940억", spark:[5,6,6,7,9,8,11,12,13,14]},
+    {name:"에스제이로보틱스",code:"289410",mkt:"코스닥", price:27300,  pct:15.93, limit:false, vol:"1,872억", spark:[6,6,7,8,8,10,11,12,12,14]},
+    {name:"금강조선해양",  code:"042660", mkt:"코스피", price:64800,  pct:13.68, limit:false, vol:"2,455억", spark:[6,7,7,9,9,10,11,12,13,13]},
+    {name:"넥스트에너지",  code:"336570", mkt:"코스피", price:38950,  pct:12.05, limit:false, vol:"1,730억", spark:[7,7,8,8,10,10,11,12,12,13]},
+    {name:"청호AI소프트",  code:"452160", mkt:"코스닥", price:15840,  pct:10.87, limit:false, vol:"984억",   spark:[7,8,8,9,9,11,11,12,13,13]},
+    {name:"동해철강",     code:"021050", mkt:"코스피", price:8420,   pct:9.34,  limit:false, vol:"612억",   spark:[8,8,9,9,10,10,11,12,12,13]},
+    {name:"우주항공테크",  code:"389020", mkt:"코스닥", price:52600,  pct:8.71,  limit:false, vol:"1,204억", spark:[8,9,9,10,10,11,11,12,13,13]},
+    {name:"삼진식품",     code:"005610", mkt:"코스피", price:23150,  pct:7.95,  limit:false, vol:"438억",   spark:[9,9,10,10,10,11,12,12,12,13]},
+  ];
+
+  const fmt = n => n.toLocaleString("ko-KR");
+  const chgWon = s => Math.round(s.price - s.price / (1 + s.pct/100));
+
+  function sparkline(canvas, data){
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = w*dpr; canvas.height = h*dpr;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(dpr,dpr);
+    const up = getComputedStyle(document.documentElement).getPropertyValue("--up").trim();
+    const min = Math.min(...data), max = Math.max(...data);
+    const x = i => 2 + i*(w-4)/(data.length-1);
+    const y = v => h-4 - (v-min)/(max-min || 1)*(h-10);
+    ctx.beginPath();
+    data.forEach((v,i)=> i ? ctx.lineTo(x(i),y(v)) : ctx.moveTo(x(i),y(v)));
+    ctx.strokeStyle = up; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
+    ctx.lineTo(x(data.length-1), h); ctx.lineTo(x(0), h); ctx.closePath();
+    ctx.globalAlpha = .12; ctx.fillStyle = up; ctx.fill(); ctx.globalAlpha = 1;
+    // 마지막 점 강조
+    ctx.beginPath();
+    ctx.arc(x(data.length-1), y(data[data.length-1]), 3, 0, Math.PI*2);
+    ctx.fillStyle = up; ctx.fill();
+  }
+
+  function render(market){
+    const items = STOCKS.filter(s => market === "전체" || s.mkt === market);
+    const top3 = items.slice(0,3), rest = items.slice(3);
+
+    document.getElementById("podium").innerHTML = top3.map((s,i)=>`
+      <article class="card ${i===0 ? "first" : ""}">
+        <span class="rank-medal">${i+1}위</span>
+        <div class="head">
+          <div>
+            <div class="stock-name">${s.name}</div>
+            <div class="stock-meta">${s.code} · ${s.mkt}</div>
+          </div>
+          ${s.limit ? `<span class="limit-up">상한가</span>` : `<span class="mkt">${s.mkt}</span>`}
+        </div>
+        <div class="pct">+${s.pct.toFixed(2)}%</div>
+        <div class="price-line"><b>${fmt(s.price)}원</b><span class="chg">▲ ${fmt(chgWon(s))}</span></div>
+        <canvas class="spark" data-spark="${s.spark.join(",")}" aria-hidden="true"></canvas>
+        <div class="vol">거래대금 ${s.vol}</div>
+      </article>`).join("");
+
+    document.getElementById("rows").innerHTML = rest.map((s,i)=>`
+      <div class="row" style="animation-delay:${i*40}ms">
+        <span class="rk">${i+4}</span>
+        <span class="nm">${s.name} <span class="cd">${s.code} · ${s.mkt}</span></span>
+        <span class="pr"><b>${fmt(s.price)}</b>원</span>
+        <span class="pc"><span class="pct-pill">+${s.pct.toFixed(2)}%</span></span>
+        <span class="vl">${s.vol}</span>
+      </div>`).join("");
+
+    document.querySelectorAll("canvas[data-spark]").forEach(c=>{
+      sparkline(c, c.dataset.spark.split(",").map(Number));
+    });
+  }
+
+  document.querySelectorAll(".tab").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      document.querySelectorAll(".tab").forEach(b=>{
+        b.classList.toggle("active", b===btn);
+        b.setAttribute("aria-selected", b===btn ? "true" : "false");
+      });
+      render(btn.dataset.mkt);
+    });
+  });
+
+  render("전체");
+  addEventListener("resize", ()=>{
+    const active = document.querySelector(".tab.active").dataset.mkt;
+    render(active);
+  });
+</script>
