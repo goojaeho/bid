@@ -25,8 +25,8 @@ from fastapi.responses import RedirectResponse
 
 from fastapi import Body
 
-from app import (auth, genie, gov_sources, kakao, migrations, searches, store,
-                 summarize, todos)
+from app import (auth, english, genie, gov_sources, kakao, migrations, searches,
+                 store, summarize, todos)
 from app.g2b_client import CATEGORIES, G2BApiError, G2BClient
 from app.webui import icon, layout
 
@@ -1622,6 +1622,793 @@ def genie_chat_delete(request: Request, chat_id: int):
         return {"ok": True}
     except store.StoreError as e:
         return {"ok": False, "error": str(e)}
+
+
+# ------------------------------------------------- 스피킹 (영어 회화 학습)
+
+@app.post("/api/english/chat")
+def english_chat_api(request: Request, body: dict = Body(...)):
+    user = _owner_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    text = str(body.get("text") or "").strip()
+    session_id = body.get("session_id")
+    try:
+        if session_id:
+            sess = english.get_session(user, int(session_id))
+        else:
+            sess = english.create_session(user, str(body.get("scenario") or ""))
+            session_id = sess["id"]
+        messages = sess.get("messages") or []
+        if text:
+            messages.append({"role": "user", "text": text[:2000]})
+        persona = english.SCENARIOS[sess["scenario"]]["persona"]
+        reply = summarize.gemini_english_chat(persona, messages)
+        messages.append({"role": "model", "text": reply})
+        english.save_session(user, int(session_id), messages=messages)
+        return {"ok": True, "session_id": session_id, "reply": reply,
+                "usage": summarize.usage_today()}
+    except (store.StoreError, summarize.SummarizeError, ValueError) as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/english/finish")
+def english_finish_api(request: Request, body: dict = Body(...)):
+    user = _owner_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        sess = english.get_session(user, int(body.get("session_id") or 0))
+        messages = sess.get("messages") or []
+        if not any(m.get("role") == "user" for m in messages):
+            return {"ok": False, "error": "아직 대화가 없습니다. 한 마디라도 해보세요!"}
+        feedback = summarize.gemini_english_feedback(messages)
+        english.save_session(user, sess["id"], feedback=feedback)
+        return {"ok": True, "feedback": feedback}
+    except (store.StoreError, summarize.SummarizeError, ValueError) as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/english/home")
+def english_home_api(request: Request):
+    user = _owner_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        rows = english.recent_sessions(user)
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+    week_ago = datetime.now(KST) - timedelta(days=7)
+    week = 0
+    for r in rows:
+        try:
+            if datetime.fromisoformat(r["created_at"]) >= week_ago:
+                week += 1
+        except (ValueError, TypeError):
+            continue
+    reco = english.recommend_scenario([r["scenario"] for r in rows])
+    sc = english.SCENARIOS[reco]
+    recent = [{"id": r["id"], "scenario": r["scenario"],
+               "title": english.SCENARIOS.get(r["scenario"], {}).get("title", r["scenario"]),
+               "level": r["level"], "date": str(r["created_at"])[:10],
+               "has_feedback": bool(r.get("feedback"))}
+              for r in rows[:8]]
+    return {"ok": True,
+            "streak": english.compute_streak([r["created_at"] for r in rows]),
+            "week": week,
+            "recommend": {"key": reco, "title": sc["title"], "desc": sc["desc"],
+                          "level": sc["level"]},
+            "recent": recent}
+
+
+@app.get("/api/english/sessions/{session_id}")
+def english_session_api(request: Request, session_id: int):
+    user = _owner_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        return {"ok": True, "session": english.get_session(user, session_id)}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/english/polish")
+def english_polish_api(request: Request, body: dict = Body(...)):
+    user = _owner_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    text = str(body.get("text") or "").strip()
+    if len(text) < 20:
+        return {"ok": False, "error": "초안을 조금 더 길게 써주세요 (20자 이상)."}
+    try:
+        return {"ok": True, **summarize.gemini_polish_script(text),
+                "usage": summarize.usage_today()}
+    except summarize.SummarizeError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/english/scripts")
+def english_scripts_api(request: Request):
+    user = _owner_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        return {"ok": True, "items": english.list_scripts(user)}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/english/scripts")
+def english_script_add_api(request: Request, body: dict = Body(...)):
+    user = _owner_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    sentences = body.get("sentences") or []
+    if not isinstance(sentences, list) or not sentences:
+        return {"ok": False, "error": "저장할 문장이 없습니다."}
+    try:
+        item = english.save_script(user, str(body.get("title") or ""),
+                                   str(body.get("source") or ""), sentences)
+        return {"ok": True, "item": item}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/english/scripts/{script_id}/delete")
+def english_script_delete_api(request: Request, script_id: int):
+    user = _owner_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        english.delete_script(user, script_id)
+        return {"ok": True}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/english/cards")
+def english_cards_api(request: Request, due: str = Query("")):
+    user = _owner_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        return {"ok": True, "items": english.list_cards(user, due_only=due == "1")}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/english/cards")
+def english_card_add_api(request: Request, body: dict = Body(...)):
+    user = _owner_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        item = english.add_card(user, str(body.get("front") or ""),
+                                str(body.get("back") or ""),
+                                str(body.get("note") or ""))
+        return {"ok": True, "item": item}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/english/cards/{card_id}/review")
+def english_card_review_api(request: Request, card_id: int, body: dict = Body(...)):
+    user = _owner_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        result = english.review_card(user, card_id, bool(body.get("ok")))
+        return {"ok": True, **result}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/english/cards/{card_id}/delete")
+def english_card_delete_api(request: Request, card_id: int):
+    user = _owner_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        english.delete_card(user, card_id)
+        return {"ok": True}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+ENGLISH_PAGE_TMPL = """<div class="seg eng-seg" id="eng-tabs">
+  <a href="#" data-tab="home" class="on">오늘의 연습</a>
+  <a href="#" data-tab="talk">롤플레이</a>
+  <a href="#" data-tab="pitch">내 피치</a>
+  <a href="#" data-tab="cards">표현 카드</a>
+</div>
+
+<div id="pane-home" class="eng-pane">
+  <div class="eng-stats">
+    <div class="card eng-stat"><div class="n" id="eng-streak">-</div><div class="l">연속 학습일</div></div>
+    <div class="card eng-stat"><div class="n" id="eng-week">-</div><div class="l">이번 주 연습</div></div>
+  </div>
+  <div class="card" id="eng-reco"><div class="meta">오늘의 추천 불러오는 중…</div></div>
+  <div class="card"><h3 class="eng-h">최근 연습</h3><div id="eng-recent" class="meta">기록이 없습니다.</div></div>
+</div>
+
+<div id="pane-talk" class="eng-pane" hidden>
+  <div id="talk-pick">
+    <div class="meta">시나리오를 고르면 AI가 역할을 맡아 영어로 먼저 말을 겁니다. 🎤 버튼으로 말하거나 텍스트로 답하세요.</div>
+    __SCENARIO_CARDS__
+  </div>
+  <div id="talk-chat" hidden>
+    <div class="card talk-card">
+      <div class="row talk-head">
+        <b id="talk-title"></b>
+        <span class="talk-tools">
+          <label class="meta"><input type="checkbox" id="talk-tts" checked> AI 음성 읽기</label>
+          <button type="button" id="talk-finish" class="chip chip-save">연습 종료 · 피드백 받기</button>
+        </span>
+      </div>
+      <div id="talk-goals" class="meta"></div>
+      <div id="talk-log" class="talk-log"></div>
+      <form id="talk-form" class="row">
+        <button type="button" id="talk-mic" class="mic-btn" title="누르고 영어로 말하세요">MIC</button>
+        <input type="text" id="talk-input" placeholder="영어로 입력 후 Enter (또는 마이크)" autocomplete="off" maxlength="2000">
+        <button type="submit" id="talk-send">보내기</button>
+      </form>
+      <div id="talk-hint" class="meta"></div>
+    </div>
+  </div>
+  <div id="talk-fb" hidden></div>
+</div>
+
+<div id="pane-pitch" class="eng-pane" hidden>
+  <div class="card">
+    <h3 class="eng-h">새 피치 스크립트</h3>
+    <div class="meta">한국어(또는 영어 초안)로 쓰면 AI가 말하기 좋은 비즈니스 영어 문장으로 다듬어줍니다.</div>
+    <textarea id="pitch-src" rows="5" placeholder="예: 안녕하세요, 저희는 AI 기반 콘텐츠 제작 서비스를 만드는 회사입니다. 주요 고객은..."></textarea>
+    <div class="row"><button type="button" id="pitch-polish">영어로 다듬기</button><span id="pitch-status" class="meta"></span></div>
+    <div id="pitch-preview" hidden></div>
+  </div>
+  <div class="card"><h3 class="eng-h">내 스크립트</h3><div id="pitch-list" class="meta">불러오는 중…</div></div>
+  <div id="pitch-practice"></div>
+</div>
+
+<div id="pane-cards" class="eng-pane" hidden>
+  <div class="card"><h3 class="eng-h">오늘의 복습</h3><div id="card-review"><div class="meta">불러오는 중…</div></div></div>
+  <div class="card">
+    <h3 class="eng-h">카드 추가</h3>
+    <div class="row"><input type="text" id="card-front" placeholder="앞면 — 상황·뜻 (예: 가격 문의에 답할 때)" maxlength="300"></div>
+    <div class="row"><input type="text" id="card-back" placeholder="뒷면 — 영어 표현 (예: Our pricing starts at $99 a month.)" maxlength="300"></div>
+    <div class="row"><input type="text" id="card-note" placeholder="메모 (선택)" maxlength="300"><button type="button" id="card-add">추가</button></div>
+  </div>
+  <div class="card"><h3 class="eng-h">전체 카드</h3><div id="card-list" class="meta">불러오는 중…</div></div>
+</div>
+
+<style>
+  .eng-seg { margin-bottom: 14px; }
+  .eng-h { margin: 0 0 8px; font-size: 1rem; }
+  .eng-pane .card { margin-bottom: 14px; }
+  .eng-stats { display: flex; gap: 12px; }
+  .eng-stat { flex: 1; text-align: center; }
+  .eng-stat .n { font-size: 1.7rem; font-weight: 800; color: var(--accent); }
+  .eng-stat .l { color: var(--muted); font-size: 0.82rem; }
+  .scn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+  .scn { text-align: left; background: #f7f8fb; border: 1px solid #e5e8ef; border-radius: 10px;
+         padding: 12px 14px; cursor: pointer; color: var(--text); font-weight: 400; }
+  .scn:hover { border-color: var(--accent); background: #f4f7ff; }
+  .scn b { display: block; margin-bottom: 4px; }
+  .scn span { color: var(--muted); font-size: 0.82rem; }
+  .talk-card { display: flex; flex-direction: column; height: calc(100vh - 240px); min-height: 440px; }
+  .talk-head { justify-content: space-between; margin-bottom: 6px; }
+  .talk-tools { display: inline-flex; align-items: center; gap: 10px; }
+  .talk-log { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 4px 2px; }
+  .mic-btn { background: #fff; color: var(--accent); border: 2px solid var(--accent);
+             border-radius: 999px; width: 46px; height: 42px; padding: 0; font-size: 0.7rem; font-weight: 800; }
+  .mic-btn.rec { background: #d92d20; border-color: #d92d20; color: #fff; animation: engpulse 1s infinite; }
+  @keyframes engpulse { 50% { opacity: 0.6; } }
+  .genie-msg { max-width: 82%; padding: 10px 14px; border-radius: 14px;
+               font-size: 0.93rem; white-space: pre-wrap; word-break: break-word; }
+  .genie-msg.user { align-self: flex-end; background: var(--accent); color: #fff;
+                    border-bottom-right-radius: 4px; }
+  .genie-msg.ai { align-self: flex-start; background: #f1f3f7; color: var(--text);
+                  border-bottom-left-radius: 4px; }
+  .genie-msg.loading { color: var(--muted); }
+  .genie-msg.said-check b { font-weight: 800; }
+  .fb-sec { margin: 10px 0; }
+  .fb-sec h4 { margin: 0 0 6px; font-size: 0.92rem; }
+  .fb-item { background: #f7f8fb; border-radius: 8px; padding: 9px 12px; margin-bottom: 6px; font-size: 0.88rem; }
+  .fb-item .orig { color: #b42318; text-decoration: line-through; }
+  .fb-item .fixed { color: #067647; font-weight: 700; }
+  .fb-item .why { color: var(--muted); font-size: 0.82rem; }
+  .sent-row { display: flex; align-items: flex-start; gap: 8px; padding: 9px 4px; border-bottom: 1px solid #f0f1f4; }
+  .sent-row .txt { flex: 1; }
+  .sent-row .en { font-weight: 600; }
+  .sent-row .ko { color: var(--muted); font-size: 0.82rem; }
+  .sent-row .res { font-size: 0.82rem; margin-top: 3px; }
+  .sent-btn { background: #fff; color: var(--accent); border: 1px solid #dbe3ff;
+              border-radius: 8px; padding: 5px 9px; font-size: 0.78rem; font-weight: 700; flex-shrink: 0; }
+  .sent-btn.rec { background: #d92d20; border-color: #d92d20; color: #fff; }
+  .flash { text-align: center; padding: 18px 10px; }
+  .flash .front { font-size: 1.05rem; font-weight: 700; margin-bottom: 12px; }
+  .flash .back { font-size: 1.1rem; color: var(--accent); font-weight: 800; margin: 10px 0; }
+  .flash .note { color: var(--muted); font-size: 0.85rem; }
+  .miss { color: #b42318; font-weight: 800; }
+  .hit { color: #067647; }
+  textarea { width: 100%; border: 1px solid var(--line, #dcdfe6); border-radius: 10px;
+             padding: 10px 12px; font: inherit; margin-bottom: 8px; box-sizing: border-box; }
+  .card-row { display: flex; align-items: center; gap: 8px; padding: 7px 2px; border-bottom: 1px solid #f0f1f4; font-size: 0.88rem; }
+  .card-row .box-chip { background: #eef2ff; color: var(--accent); border-radius: 6px; padding: 2px 7px; font-size: 0.75rem; font-weight: 700; flex-shrink: 0; }
+  .card-row .fb { flex: 1; min-width: 0; }
+  .link-btn { border: none; background: none; color: var(--muted); cursor: pointer; padding: 2px 6px; }
+  .link-btn:hover { color: #d92d20; }
+  @media (max-width: 720px) { .talk-card { height: auto; } .talk-log { height: 50vh; } }
+</style>
+<script>
+var SCN = __SCENARIO_JSON__;
+(function () {
+  function $(id) { return document.getElementById(id); }
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function post(url, body) {
+    return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(body || {}) }).then(function (r) { return r.json(); });
+  }
+
+  // ---------- 음성 (TTS / STT)
+  function speak(text) {
+    if (!window.speechSynthesis) return;
+    speechSynthesis.cancel();
+    var u = new SpeechSynthesisUtterance(text);
+    u.lang = "en-US";
+    u.rate = 0.95;
+    var vs = speechSynthesis.getVoices().filter(function (v) { return v.lang.indexOf("en") === 0; });
+    if (vs.length) u.voice = vs[0];
+    speechSynthesis.speak(u);
+  }
+  var Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  function listen(onResult, btn) {
+    if (!Rec) { alert("이 브라우저는 음성 인식을 지원하지 않습니다. 크롬을 사용해주세요."); return; }
+    var r = new Rec();
+    r.lang = "en-US";
+    r.interimResults = false;
+    r.maxAlternatives = 1;
+    btn.classList.add("rec");
+    r.onresult = function (e) { onResult(e.results[0][0].transcript); };
+    r.onend = function () { btn.classList.remove("rec"); };
+    r.onerror = function () { btn.classList.remove("rec"); };
+    r.start();
+  }
+
+  // ---------- 탭 전환
+  var tabs = $("eng-tabs");
+  tabs.addEventListener("click", function (e) {
+    var a = e.target.closest("a[data-tab]");
+    if (!a) return;
+    e.preventDefault();
+    tabs.querySelectorAll("a").forEach(function (x) { x.classList.toggle("on", x === a); });
+    ["home", "talk", "pitch", "cards"].forEach(function (t) {
+      $("pane-" + t).hidden = t !== a.dataset.tab;
+    });
+    if (a.dataset.tab === "home") loadHome();
+    if (a.dataset.tab === "pitch") loadScripts();
+    if (a.dataset.tab === "cards") loadCards();
+  });
+  function goTab(name) {
+    tabs.querySelector('a[data-tab="' + name + '"]').click();
+  }
+
+  // ---------- 홈 (오늘의 연습)
+  function loadHome() {
+    fetch("/api/english/home").then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.ok) { $("eng-reco").innerHTML = '<div class="meta">' + (d.error || "오류") + "</div>"; return; }
+      $("eng-streak").textContent = d.streak + "일";
+      $("eng-week").textContent = d.week + "회";
+      var reco = $("eng-reco");
+      reco.innerHTML = "";
+      reco.appendChild(el("h3", "eng-h", "오늘의 추천 연습"));
+      var b = el("div", "meta", "Level " + d.recommend.level + " · " + d.recommend.desc);
+      var title = el("div", "", "");
+      var strong = el("b", "", d.recommend.title);
+      title.appendChild(strong);
+      reco.appendChild(title);
+      reco.appendChild(b);
+      var btn = el("button", "", "바로 시작");
+      btn.type = "button";
+      btn.style.marginTop = "8px";
+      btn.addEventListener("click", function () { goTab("talk"); startScenario(d.recommend.key); });
+      reco.appendChild(btn);
+      var rc = $("eng-recent");
+      rc.innerHTML = "";
+      if (!d.recent.length) { rc.textContent = "아직 연습 기록이 없습니다. 오늘 첫 연습을 시작해보세요!"; return; }
+      d.recent.forEach(function (s) {
+        var row = el("div", "card-row");
+        row.appendChild(el("span", "box-chip", "L" + s.level));
+        row.appendChild(el("span", "fb", s.title + " · " + s.date));
+        if (s.has_feedback) {
+          var v = el("button", "sent-btn", "피드백 보기");
+          v.type = "button";
+          v.addEventListener("click", function () {
+            fetch("/api/english/sessions/" + s.id).then(function (r) { return r.json(); })
+              .then(function (d2) {
+                if (!d2.ok || !d2.session.feedback) return;
+                goTab("talk");
+                $("talk-pick").hidden = true;
+                $("talk-chat").hidden = true;
+                showFeedback(d2.session.feedback);
+              });
+          });
+          row.appendChild(v);
+        }
+        rc.appendChild(row);
+      });
+    }).catch(function () {});
+  }
+
+  // ---------- 롤플레이
+  var sessionId = null;
+  var talkLog = $("talk-log");
+  function addTalk(text, cls) {
+    var div = el("div", "genie-msg " + cls, text);
+    talkLog.appendChild(div);
+    talkLog.scrollTop = talkLog.scrollHeight;
+    return div;
+  }
+  window.startScenario = startScenario;
+  function startScenario(key) {
+    var sc = SCN[key];
+    if (!sc) return;
+    sessionId = null;
+    $("talk-pick").hidden = true;
+    $("talk-fb").hidden = true;
+    $("talk-chat").hidden = false;
+    $("talk-title").textContent = "L" + sc.level + " · " + sc.title;
+    $("talk-goals").textContent = "이런 표현을 써보세요: " + sc.goals.join("  |  ");
+    talkLog.innerHTML = "";
+    var wait = addTalk("상대가 말을 준비하고 있어요…", "ai loading");
+    post("/api/english/chat", { scenario: key }).then(function (d) {
+      if (!d.ok) { wait.textContent = "오류: " + (d.error || "실패"); return; }
+      sessionId = d.session_id;
+      wait.classList.remove("loading");
+      wait.textContent = d.reply;
+      if ($("talk-tts").checked) speak(d.reply);
+      $("talk-input").focus();
+    }).catch(function () { wait.textContent = "네트워크 오류"; });
+  }
+  document.querySelectorAll(".scn").forEach(function (b) {
+    b.addEventListener("click", function () { startScenario(b.dataset.key); });
+  });
+  $("talk-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    sendTalk($("talk-input").value.trim());
+  });
+  function sendTalk(q) {
+    if (!q || !sessionId || $("talk-send").disabled) return;
+    $("talk-input").value = "";
+    addTalk(q, "user");
+    var wait = addTalk("…", "ai loading");
+    $("talk-send").disabled = true;
+    post("/api/english/chat", { session_id: sessionId, text: q }).then(function (d) {
+      $("talk-send").disabled = false;
+      if (!d.ok) { wait.textContent = "오류: " + (d.error || "실패"); return; }
+      wait.classList.remove("loading");
+      wait.textContent = d.reply;
+      if ($("talk-tts").checked) speak(d.reply);
+      $("talk-input").focus();
+    }).catch(function () { $("talk-send").disabled = false; wait.textContent = "네트워크 오류"; });
+  }
+  $("talk-mic").addEventListener("click", function () {
+    listen(function (text) { $("talk-input").value = text; sendTalk(text); }, $("talk-mic"));
+  });
+  $("talk-finish").addEventListener("click", function () {
+    if (!sessionId) return;
+    if (window.speechSynthesis) speechSynthesis.cancel();
+    $("talk-finish").disabled = true;
+    $("talk-hint").textContent = "피드백을 만들고 있어요… (몇 초 걸립니다)";
+    post("/api/english/finish", { session_id: sessionId }).then(function (d) {
+      $("talk-finish").disabled = false;
+      $("talk-hint").textContent = "";
+      if (!d.ok) { alert(d.error || "피드백 실패"); return; }
+      $("talk-chat").hidden = true;
+      showFeedback(d.feedback);
+    }).catch(function () { $("talk-finish").disabled = false; $("talk-hint").textContent = ""; });
+  });
+  function showFeedback(fb) {
+    var box = $("talk-fb");
+    box.hidden = false;
+    box.innerHTML = "";
+    var card = el("div", "card");
+    card.appendChild(el("h3", "eng-h", "연습 피드백"));
+    if (fb.corrections && fb.corrections.length) {
+      var sec = el("div", "fb-sec");
+      sec.appendChild(el("h4", "", "교정"));
+      fb.corrections.forEach(function (c) {
+        var it = el("div", "fb-item");
+        it.appendChild(el("div", "orig", c.original || ""));
+        it.appendChild(el("div", "fixed", c.fixed || ""));
+        it.appendChild(el("div", "why", c.why || ""));
+        sec.appendChild(it);
+      });
+      card.appendChild(sec);
+    }
+    if (fb.expressions && fb.expressions.length) {
+      var sec2 = el("div", "fb-sec");
+      sec2.appendChild(el("h4", "", "이럴 땐 이렇게 — 바로 쓰는 표현"));
+      fb.expressions.forEach(function (x) {
+        var it = el("div", "fb-item");
+        it.appendChild(el("div", "why", x.ko || ""));
+        it.appendChild(el("div", "fixed", x.en || ""));
+        var save = el("button", "sent-btn", "카드로 저장");
+        save.type = "button";
+        save.style.marginTop = "5px";
+        save.addEventListener("click", function () {
+          post("/api/english/cards", { front: x.ko || "", back: x.en || "" })
+            .then(function (d) {
+              if (d.ok) { save.textContent = "저장됨 ✓"; save.disabled = true; }
+              else alert(d.error || "저장 실패");
+            });
+        });
+        it.appendChild(save);
+        sec2.appendChild(it);
+      });
+      card.appendChild(sec2);
+    }
+    if (fb.good && fb.good.length) {
+      var sec3 = el("div", "fb-sec");
+      sec3.appendChild(el("h4", "", "잘한 점"));
+      fb.good.forEach(function (g) { sec3.appendChild(el("div", "fb-item", "👍 " + g)); });
+      card.appendChild(sec3);
+    }
+    var again = el("button", "", "다른 연습 하기");
+    again.type = "button";
+    again.addEventListener("click", function () {
+      box.hidden = true;
+      $("talk-pick").hidden = false;
+    });
+    card.appendChild(again);
+    box.appendChild(card);
+    box.scrollIntoView({ behavior: "smooth" });
+  }
+
+  // ---------- 내 피치
+  var pendingScript = null;
+  $("pitch-polish").addEventListener("click", function () {
+    var text = $("pitch-src").value.trim();
+    $("pitch-status").textContent = "다듬는 중… (몇 초 걸립니다)";
+    $("pitch-polish").disabled = true;
+    post("/api/english/polish", { text: text }).then(function (d) {
+      $("pitch-polish").disabled = false;
+      $("pitch-status").textContent = "";
+      if (!d.ok) { alert(d.error || "실패"); return; }
+      pendingScript = { title: d.title, source: text, sentences: d.sentences };
+      var pv = $("pitch-preview");
+      pv.hidden = false;
+      pv.innerHTML = "";
+      pv.appendChild(el("h4", "eng-h", "미리보기 — " + (d.title || "새 스크립트")));
+      d.sentences.forEach(function (s) {
+        var row = el("div", "sent-row");
+        var t = el("div", "txt");
+        t.appendChild(el("div", "en", s.en));
+        t.appendChild(el("div", "ko", s.ko));
+        row.appendChild(t);
+        pv.appendChild(row);
+      });
+      var save = el("button", "", "저장하고 연습하기");
+      save.type = "button";
+      save.style.marginTop = "10px";
+      save.addEventListener("click", function () {
+        post("/api/english/scripts", pendingScript).then(function (d2) {
+          if (!d2.ok) { alert(d2.error || "저장 실패"); return; }
+          pv.hidden = true;
+          $("pitch-src").value = "";
+          loadScripts();
+          openScript(d2.item);
+        });
+      });
+      pv.appendChild(save);
+    }).catch(function () { $("pitch-polish").disabled = false; $("pitch-status").textContent = "네트워크 오류"; });
+  });
+
+  function loadScripts() {
+    fetch("/api/english/scripts").then(function (r) { return r.json(); }).then(function (d) {
+      var list = $("pitch-list");
+      list.innerHTML = "";
+      if (!d.ok) { list.textContent = d.error || "오류"; return; }
+      if (!d.items.length) { list.textContent = "저장된 스크립트가 없습니다."; return; }
+      d.items.forEach(function (s) {
+        var row = el("div", "card-row");
+        var open = el("a", "fb", "");
+        open.href = "#";
+        open.textContent = s.title + " (" + (s.sentences || []).length + "문장)";
+        open.addEventListener("click", function (e) { e.preventDefault(); openScript(s); });
+        row.appendChild(open);
+        var d1 = el("button", "link-btn", "삭제");
+        d1.type = "button";
+        d1.addEventListener("click", function () {
+          if (!confirm('"' + s.title + '" 스크립트를 삭제할까요?')) return;
+          post("/api/english/scripts/" + s.id + "/delete").then(function () {
+            $("pitch-practice").innerHTML = "";
+            loadScripts();
+          });
+        });
+        row.appendChild(d1);
+        list.appendChild(row);
+      });
+    }).catch(function () {});
+  }
+
+  function norm(s) {
+    return s.toLowerCase().replace(/[^a-z0-9' ]+/g, " ").split(/\\s+/).filter(Boolean);
+  }
+  function compare(target, said) {
+    var a = norm(target), b = norm(said);
+    var hit = {};
+    var used = {};
+    a.forEach(function (w, i) {
+      for (var j = 0; j < b.length; j++) {
+        if (!used[j] && b[j] === w) { used[j] = true; hit[i] = true; break; }
+      }
+    });
+    var n = Object.keys(hit).length;
+    var pct = a.length ? Math.round(100 * n / a.length) : 0;
+    var html = a.map(function (w, i) {
+      return '<span class="' + (hit[i] ? "hit" : "miss") + '">' + w + "</span>";
+    }).join(" ");
+    return { pct: pct, html: html };
+  }
+
+  function openScript(s) {
+    var box = $("pitch-practice");
+    box.innerHTML = "";
+    var card = el("div", "card");
+    card.appendChild(el("h3", "eng-h", "연습 — " + s.title));
+    card.appendChild(el("div", "meta", "듣기로 원어민 발음을 듣고, 말하기로 따라 말해보세요. 초록=말한 단어, 빨강=빠뜨린 단어"));
+    (s.sentences || []).forEach(function (sent) {
+      var row = el("div", "sent-row");
+      var t = el("div", "txt");
+      t.appendChild(el("div", "en", sent.en));
+      t.appendChild(el("div", "ko", sent.ko || ""));
+      var res = el("div", "res");
+      t.appendChild(res);
+      var play = el("button", "sent-btn", "듣기");
+      play.type = "button";
+      play.addEventListener("click", function () { speak(sent.en); });
+      var say = el("button", "sent-btn", "말하기");
+      say.type = "button";
+      say.addEventListener("click", function () {
+        listen(function (text) {
+          var c = compare(sent.en, text);
+          res.innerHTML = "일치율 <b>" + c.pct + "%</b> · " + c.html +
+            '<br><span class="meta">내 발화: ' + text + "</span>";
+        }, say);
+      });
+      row.appendChild(play);
+      row.appendChild(say);
+      row.appendChild(t);
+      card.appendChild(row);
+    });
+    box.appendChild(card);
+    card.scrollIntoView({ behavior: "smooth" });
+  }
+
+  // ---------- 표현 카드
+  var dueQueue = [];
+  function loadCards() {
+    fetch("/api/english/cards?due=1").then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.ok) { $("card-review").innerHTML = '<div class="meta">' + (d.error || "오류") + "</div>"; return; }
+      dueQueue = d.items;
+      nextCard();
+    }).catch(function () {});
+    fetch("/api/english/cards").then(function (r) { return r.json(); }).then(function (d) {
+      var list = $("card-list");
+      list.innerHTML = "";
+      if (!d.ok) { list.textContent = d.error || "오류"; return; }
+      if (!d.items.length) { list.textContent = "카드가 없습니다. 롤플레이 피드백에서 저장하거나 직접 추가해보세요."; return; }
+      d.items.forEach(function (c) {
+        var row = el("div", "card-row");
+        row.appendChild(el("span", "box-chip", "상자" + c.box));
+        row.appendChild(el("span", "fb", c.front + " → " + c.back));
+        var d1 = el("button", "link-btn", "삭제");
+        d1.type = "button";
+        d1.addEventListener("click", function () {
+          post("/api/english/cards/" + c.id + "/delete").then(loadCards);
+        });
+        row.appendChild(d1);
+        list.appendChild(row);
+      });
+    }).catch(function () {});
+  }
+  function nextCard() {
+    var box = $("card-review");
+    box.innerHTML = "";
+    if (!dueQueue.length) {
+      box.innerHTML = '<div class="meta">오늘 복습할 카드를 모두 끝냈어요! 🎉</div>';
+      return;
+    }
+    var c = dueQueue[0];
+    var f = el("div", "flash");
+    f.appendChild(el("div", "meta", "남은 카드 " + dueQueue.length + "장 · 상자" + c.box));
+    f.appendChild(el("div", "front", c.front));
+    var reveal = el("button", "", "정답 보기");
+    reveal.type = "button";
+    reveal.addEventListener("click", function () {
+      reveal.remove();
+      f.appendChild(el("div", "back", c.back));
+      if (c.note) f.appendChild(el("div", "note", c.note));
+      var play = el("button", "sent-btn", "듣기");
+      play.type = "button";
+      play.addEventListener("click", function () { speak(c.back); });
+      f.appendChild(play);
+      var btns = el("div", "row");
+      btns.style.justifyContent = "center";
+      btns.style.marginTop = "12px";
+      var again = el("button", "", "다시 (오늘 또)");
+      again.type = "button";
+      again.style.background = "#d92d20";
+      var good = el("button", "", "알겠음");
+      good.type = "button";
+      [[again, false], [good, true]].forEach(function (pair) {
+        pair[0].addEventListener("click", function () {
+          post("/api/english/cards/" + c.id + "/review", { ok: pair[1] }).then(function () {
+            dueQueue.shift();
+            if (!pair[1]) dueQueue.push(c);
+            nextCard();
+          });
+        });
+        btns.appendChild(pair[0]);
+      });
+      f.appendChild(btns);
+    });
+    f.appendChild(reveal);
+    box.appendChild(f);
+  }
+  $("card-add").addEventListener("click", function () {
+    post("/api/english/cards", {
+      front: $("card-front").value, back: $("card-back").value, note: $("card-note").value,
+    }).then(function (d) {
+      if (!d.ok) { alert(d.error || "추가 실패"); return; }
+      $("card-front").value = $("card-back").value = $("card-note").value = "";
+      loadCards();
+    });
+  });
+
+  loadHome();
+  if (window.speechSynthesis) speechSynthesis.getVoices();  // 보이스 목록 예열
+})();
+</script>"""
+
+
+def _english_page() -> str:
+    groups = []
+    for lv, name in english.LEVELS.items():
+        cards = "".join(
+            f'<button type="button" class="scn" data-key="{key}">'
+            f'<b>{esc(sc["title"])}</b><span>{esc(sc["desc"])}</span></button>'
+            for key, sc in english.SCENARIOS.items() if sc["level"] == lv
+        )
+        groups.append(
+            f'<div class="card"><h3 class="eng-h">Level {lv} · {name}</h3>'
+            f'<div class="scn-grid">{cards}</div></div>'
+        )
+    scn_json = json.dumps(
+        {k: {"title": v["title"], "level": v["level"], "desc": v["desc"],
+             "goals": v["goals"]} for k, v in english.SCENARIOS.items()},
+        ensure_ascii=False)
+    return (ENGLISH_PAGE_TMPL
+            .replace("__SCENARIO_CARDS__", "".join(groups))
+            .replace("__SCENARIO_JSON__", scn_json))
+
+
+@app.get("/english", response_class=HTMLResponse)
+def english_page(request: Request):
+    redirect = gate(request)
+    if redirect:
+        return redirect
+    user = user_of(request)
+    if not auth.is_owner(user):
+        return RedirectResponse("/bid", status_code=302)
+    return layout("스피킹 연습", icon("mic", 20) + " 스피킹", "/english",
+                  _english_page(), user=user, admin=auth.is_admin(user))
 
 
 @app.get("/api/genie/usage")

@@ -9,7 +9,7 @@ os.environ["G2B_SERVICE_KEY"] = "dummy"
 from fastapi.testclient import TestClient
 
 import api.index as web
-from app import auth, genie, searches, summarize, todos
+from app import auth, english, genie, searches, summarize, todos
 from app.store import StoreError
 
 KST = ZoneInfo("Asia/Seoul")
@@ -301,6 +301,91 @@ class QuickSearchTest(unittest.TestCase):
             r = self.client.post("/api/searches/7/delete", cookies=self.cookie)
         self.assertTrue(r.json()["ok"])
         self.assertEqual(captured, {"email": "guest@gmail.com", "sid": 7})
+
+
+class EnglishTest(unittest.TestCase):
+    """스피킹 탭 — 커리큘럼·카드 복습·스트릭 로직 및 접근 제어."""
+
+    def setUp(self):
+        os.environ["GOOGLE_CLIENT_ID"] = "cid"
+        os.environ["GOOGLE_CLIENT_SECRET"] = "sec"
+        os.environ["ADMIN_EMAILS"] = "boss@company.com"
+        self.client = TestClient(web.app)
+        self.owner_cookie = {auth.COOKIE_NAME: auth.make_session("boss@company.com")}
+        self.user_cookie = {auth.COOKIE_NAME: auth.make_session("guest@gmail.com")}
+
+    def tearDown(self):
+        for k in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "ADMIN_EMAILS"):
+            os.environ.pop(k, None)
+
+    def test_scenarios_integrity(self):
+        for key, sc in english.SCENARIOS.items():
+            self.assertIn(sc["level"], english.LEVELS, key)
+            for field in ("title", "desc", "persona", "goals"):
+                self.assertTrue(sc.get(field), f"{key}.{field}")
+
+    def test_card_review_intervals(self):
+        from datetime import date
+        today = date(2026, 8, 8)
+        self.assertEqual(english.next_review(3, ok=False, today=today),
+                         (1, "2026-08-08"))
+        self.assertEqual(english.next_review(1, ok=True, today=today),
+                         (2, "2026-08-09"))
+        self.assertEqual(english.next_review(4, ok=True, today=today),
+                         (5, "2026-08-29"))
+        # 최고 상자에서 또 맞아도 상자 5 유지
+        self.assertEqual(english.next_review(5, ok=True, today=today)[0], 5)
+
+    def test_streak(self):
+        from datetime import date
+        today = date(2026, 8, 8)
+        days = ["2026-08-08T10:00:00+09:00", "2026-08-07T10:00:00+09:00",
+                "2026-08-06T09:00:00+09:00", "2026-08-03T09:00:00+09:00"]
+        self.assertEqual(english.compute_streak(days, today=today), 3)
+        # 오늘 안 했어도 어제까지 이어졌으면 유지
+        self.assertEqual(english.compute_streak(days[1:], today=today), 2)
+        # 이틀 비면 0
+        self.assertEqual(english.compute_streak(["2026-08-05T09:00:00+09:00"],
+                                                today=today), 0)
+        self.assertEqual(english.compute_streak([], today=today), 0)
+
+    def test_recommend_least_practiced(self):
+        first = english.CURRICULUM[0]
+        second = english.CURRICULUM[1]
+        self.assertEqual(english.recommend_scenario([]), first)
+        self.assertEqual(english.recommend_scenario([first]), second)
+
+    def test_non_owner_blocked(self):
+        r = self.client.get("/english", cookies=self.user_cookie,
+                            follow_redirects=False)
+        self.assertEqual((r.status_code, r.headers["location"]), (302, "/bid"))
+        r = self.client.get("/api/english/home", cookies=self.user_cookie)
+        self.assertFalse(r.json()["ok"])
+
+    def test_owner_page_renders(self):
+        r = self.client.get("/english", cookies=self.owner_cookie)
+        self.assertEqual(r.status_code, 200)
+        for marker in ("pane-home", "pane-talk", "pane-pitch", "pane-cards",
+                       "talk-mic", "투자자 Q&A"):
+            self.assertIn(marker, r.text, marker)
+
+    def test_chat_api_flow(self):
+        saved = {}
+        with patch.object(english, "create_session",
+                          return_value={"id": 11, "scenario": "intro",
+                                        "messages": []}), \
+             patch.object(english, "save_session",
+                          side_effect=lambda e, i, **kw: saved.update({i: kw})), \
+             patch.object(summarize, "gemini_english_chat",
+                          return_value="Hi! Tell me about yourself."), \
+             patch.object(summarize, "usage_today", return_value={}):
+            r = self.client.post("/api/english/chat", cookies=self.owner_cookie,
+                                 json={"scenario": "intro"})
+        d = r.json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["session_id"], 11)
+        self.assertEqual(saved[11]["messages"],
+                         [{"role": "model", "text": "Hi! Tell me about yourself."}])
 
 
 if __name__ == "__main__":

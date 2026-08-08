@@ -237,6 +237,110 @@ def gemini_chat(messages: list[dict]) -> str:
     return reply
 
 
+def _gemini_call(payload: dict, kind: str, timeout: int = 60) -> dict:
+    """generateContent 호출 + 사용량 기록. candidates JSON을 그대로 반환."""
+    key = gemini_key()
+    if not key:
+        raise SummarizeError("GEMINI_API_KEY가 설정되지 않았습니다.")
+    resp = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model()}:generateContent",
+        params={"key": key}, json=payload, timeout=timeout,
+    )
+    data = resp.json()
+    try:
+        data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError):
+        err = data.get("error", {}).get("message", str(data)[:200])
+        raise SummarizeError(f"응답 실패: {err}")
+    _record_usage(kind, data)
+    return data
+
+
+def _first_text(data: dict) -> str:
+    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+
+def gemini_english_chat(persona: str, messages: list[dict]) -> str:
+    """영어 롤플레이 대화. persona = 시나리오 시스템 프롬프트."""
+    contents = [
+        {"role": m["role"] if m.get("role") in ("user", "model") else "user",
+         "parts": [{"text": str(m.get("text", ""))[:4000]}]}
+        for m in messages[-30:]
+    ]
+    if not contents:  # 첫 턴: AI가 먼저 말을 건다
+        contents = [{"role": "user", "parts": [{"text": "(Start the conversation.)"}]}]
+    data = _gemini_call({
+        "systemInstruction": {"parts": [{"text": persona}]},
+        "contents": contents,
+    }, kind="english")
+    return _first_text(data)
+
+
+FEEDBACK_PROMPT = """다음은 한국인 학습자(user)와 AI(model)의 영어 회화 연습 대화입니다.
+학습자의 영어에 대해 아래 JSON 형식으로만 피드백하세요. 설명은 한국어로 씁니다.
+
+{"corrections": [{"original": "학습자가 말한 문장", "fixed": "고친 문장", "why": "이유(한국어 한 줄)"}],
+ "expressions": [{"ko": "상황(한국어)", "en": "이럴 때 원어민이 쓰는 표현"}],
+ "good": ["잘한 점(한국어)"]}
+
+corrections는 중요한 것 최대 5개, expressions는 이 대화에서 바로 써먹을 수 있는 표현 최대 5개,
+good은 최대 3개. 학습자 발화가 거의 없으면 각 배열을 비워도 됩니다.
+
+대화:
+"""
+
+
+def gemini_english_feedback(messages: list[dict]) -> dict:
+    """연습 대화 전체에 대한 교정/표현/칭찬 피드백 (JSON)."""
+    transcript = "\n".join(
+        f"{'학습자' if m.get('role') == 'user' else 'AI'}: {str(m.get('text', ''))[:1000]}"
+        for m in messages[-40:]
+    )
+    data = _gemini_call({
+        "contents": [{"parts": [{"text": FEEDBACK_PROMPT + transcript}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }, kind="english", timeout=90)
+    try:
+        fb = json.loads(_first_text(data))
+    except json.JSONDecodeError:
+        raise SummarizeError("피드백 생성 실패 — 다시 시도해주세요.")
+    return {"corrections": fb.get("corrections") or [],
+            "expressions": fb.get("expressions") or [],
+            "good": fb.get("good") or []}
+
+
+POLISH_PROMPT = """다음은 한국 스타트업 대표가 쓴 피치/소개 스크립트 초안입니다 (한국어 또는 영어).
+이를 국제 비즈니스 자리(IR, 전시회)에서 말하기 좋은 자연스러운 영어로 다듬고,
+말하기 연습을 위해 문장 단위로 나눠 아래 JSON 형식으로만 반환하세요.
+
+{"title": "스크립트 제목(한국어, 10자 내외)",
+ "sentences": [{"en": "영어 문장", "ko": "한국어 뜻"}]}
+
+문장은 한 번에 말하기 좋은 길이(20단어 이하)로 나누고, 구어체로 자연스럽게 쓰세요.
+
+초안:
+"""
+
+
+def gemini_polish_script(text: str) -> dict:
+    """피치 초안 → 비즈니스 영어 문장 목록 (JSON)."""
+    data = _gemini_call({
+        "contents": [{"parts": [{"text": POLISH_PROMPT + text[:6000]}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }, kind="english", timeout=90)
+    try:
+        out = json.loads(_first_text(data))
+        sentences = [
+            {"en": str(s.get("en", "")).strip(), "ko": str(s.get("ko", "")).strip()}
+            for s in out.get("sentences", []) if isinstance(s, dict) and s.get("en")
+        ]
+    except (json.JSONDecodeError, AttributeError):
+        raise SummarizeError("스크립트 다듬기 실패 — 다시 시도해주세요.")
+    if not sentences:
+        raise SummarizeError("문장을 만들지 못했습니다. 초안을 조금 더 써주세요.")
+    return {"title": str(out.get("title", "")).strip()[:100], "sentences": sentences}
+
+
 def gemini_translate_paragraphs(paragraphs: list[dict]) -> list[dict]:
     """[{id, text}] 목록을 한국어로 번역해 같은 형식으로 반환 (Gemini JSON 모드)."""
     key = gemini_key()

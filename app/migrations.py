@@ -90,6 +90,40 @@ MIGRATIONS: list[tuple[int, str]] = [
         create index if not exists quick_searches_email_idx
           on quick_searches (email, page, created_at);
     """),
+    (9, """
+        create table if not exists english_sessions (
+          id bigint generated always as identity primary key,
+          email text not null,
+          scenario text not null,
+          level int not null default 1,
+          messages jsonb not null default '[]'::jsonb,
+          feedback jsonb,
+          created_at timestamptz not null default now()
+        );
+        create index if not exists english_sessions_email_idx
+          on english_sessions (email, created_at desc);
+        create table if not exists english_scripts (
+          id bigint generated always as identity primary key,
+          email text not null,
+          title text not null,
+          source text not null default '',
+          sentences jsonb not null default '[]'::jsonb,
+          created_at timestamptz not null default now(),
+          updated_at timestamptz not null default now()
+        );
+        create table if not exists english_cards (
+          id bigint generated always as identity primary key,
+          email text not null,
+          front text not null,
+          back text not null,
+          note text not null default '',
+          box int not null default 1,
+          due_date date not null default current_date,
+          created_at timestamptz not null default now()
+        );
+        create index if not exists english_cards_due_idx
+          on english_cards (email, due_date);
+    """),
 ]
 
 _ran = False
