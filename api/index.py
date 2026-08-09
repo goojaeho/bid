@@ -874,7 +874,7 @@ def _todo_row(t: dict, today_iso: str, done: bool = False,
                if done else "")
     child_mark = (f'<span class="sub-mark">{icon("corner-down-right", 13)}</span>'
                   if is_child else "")
-    sub_chip = (f'<span class="area-chip" style="background:#eef0f4;color:#4b5265">'
+    sub_chip = (f'<span class="area-chip" style="background:var(--fill);color:var(--sub)">'
                 f'하위 {sub_count}</span>' if sub_count else "")
     li_cls = ' class="sub-row"' if is_child else ""
     return (
@@ -956,7 +956,7 @@ def _home_content(data: dict, st: dict) -> str:
         '<div class="card"><b style="font-size:0.92rem">최근 14일 완료 추이</b>'
         f'<div class="bars">{"".join(cols)}</div>'
         '<div class="legend">'
-        '<span><span class="dot" style="background:#3557f0"></span>업무</span>'
+        '<span><span class="dot" style="background:#3182f6"></span>업무</span>'
         '<span><span class="dot" style="background:#0e9384"></span>개인</span>'
         "</div></div>"
     )
@@ -1383,23 +1383,23 @@ GENIE_PAGE = """<div class="genie-wrap">
   .genie-side { width: 210px; flex-shrink: 0; display: flex; flex-direction: column;
                 gap: 8px; overflow: hidden; }
   .genie-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  .genie-new-btn { width: 100%; padding: 8px; border: 1px dashed var(--accent);
-                   background: none; color: var(--accent); border-radius: 8px;
-                   cursor: pointer; font-size: 0.88rem; }
+  .genie-new-btn { width: 100%; padding: 9px; border: none;
+                   background: var(--accent-soft); color: var(--accent); border-radius: 10px;
+                   cursor: pointer; font-size: 0.88rem; font-weight: 700; }
   .genie-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
   .genie-item { display: flex; align-items: center; gap: 4px; padding: 7px 8px;
                 border-radius: 8px; cursor: pointer; font-size: 0.85rem; color: var(--text); }
-  .genie-item:hover { background: #f1f3f7; }
-  .genie-item.active { background: #e8edff; color: var(--accent); font-weight: 600; }
+  .genie-item:hover { background: var(--fill); }
+  .genie-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .genie-item .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .genie-item .del { border: none; background: none; color: var(--muted); cursor: pointer;
                      padding: 2px 4px; border-radius: 4px; font-size: 0.85rem; line-height: 1; }
-  .genie-item .del:hover { color: #d92d20; background: #fee4e2; }
+  .genie-item .del:hover { color: var(--red); background: var(--red-soft); }
   .genie-msg { max-width: 82%; padding: 10px 14px; border-radius: 14px;
                font-size: 0.93rem; white-space: pre-wrap; word-break: break-word; }
   .genie-msg.user { align-self: flex-end; background: var(--accent); color: #fff;
                     border-bottom-right-radius: 4px; }
-  .genie-msg.ai { align-self: flex-start; background: #f1f3f7; color: var(--text);
+  .genie-msg.ai { align-self: flex-start; background: var(--fill); color: var(--text);
                   border-bottom-left-radius: 4px; }
   .genie-msg.loading { color: var(--muted); }
   @media (max-width: 720px) {
@@ -1425,9 +1425,9 @@ GENIE_PAGE = """<div class="genie-wrap">
     usageEl.innerHTML = "오늘 Gemini 사용: <b>" + u.requests.toLocaleString() + "회</b> / "
       + u.limit.toLocaleString() + "회 한도 · 남음 <b>" + u.remaining.toLocaleString() + "회</b>"
       + " · 토큰 " + u.tokens.toLocaleString()
-      + ' <span style="display:inline-block;width:90px;height:6px;background:#e7e9ee;border-radius:3px;vertical-align:middle;margin-left:6px">'
+      + ' <span style="display:inline-block;width:90px;height:6px;background:var(--line);border-radius:3px;vertical-align:middle;margin-left:6px">'
       + '<span style="display:block;width:' + pct + '%;height:6px;border-radius:3px;background:'
-      + (pct >= 90 ? "#d92d20" : pct >= 70 ? "#f79009" : "var(--accent)") + '"></span></span>'
+      + (pct >= 90 ? "var(--red)" : pct >= 70 ? "#f5a623" : "var(--accent)") + '"></span></span>'
       + " (지니·AI요약·번역 합산, 자정 기준 근사치)";
   }
   fetch("/api/genie/usage").then(function (r) { return r.json(); })
@@ -1890,54 +1890,54 @@ ENGLISH_PAGE_TMPL = """<div class="seg eng-seg" id="eng-tabs">
   .eng-stat .n { font-size: 1.7rem; font-weight: 800; color: var(--accent); }
   .eng-stat .l { color: var(--muted); font-size: 0.82rem; }
   .scn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
-  .scn { text-align: left; background: #f7f8fb; border: 1px solid #e5e8ef; border-radius: 10px;
+  .scn { text-align: left; background: var(--fill); border: 1px solid transparent; border-radius: 12px;
          padding: 12px 14px; cursor: pointer; color: var(--text); font-weight: 400; }
-  .scn:hover { border-color: var(--accent); background: #f4f7ff; }
+  .scn:hover { border-color: var(--accent); background: var(--accent-soft); }
   .scn b { display: block; margin-bottom: 4px; }
   .scn span { color: var(--muted); font-size: 0.82rem; }
   .talk-card { display: flex; flex-direction: column; height: calc(100vh - 240px); min-height: 440px; }
   .talk-head { justify-content: space-between; margin-bottom: 6px; }
   .talk-tools { display: inline-flex; align-items: center; gap: 10px; }
   .talk-log { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 4px 2px; }
-  .mic-btn { background: #fff; color: var(--accent); border: 2px solid var(--accent);
+  .mic-btn { background: var(--card); color: var(--accent); border: 2px solid var(--accent);
              border-radius: 999px; width: 46px; height: 42px; padding: 0; font-size: 0.7rem; font-weight: 800; }
-  .mic-btn.rec { background: #d92d20; border-color: #d92d20; color: #fff; animation: engpulse 1s infinite; }
+  .mic-btn.rec { background: var(--red); border-color: var(--red); color: #fff; animation: engpulse 1s infinite; }
   @keyframes engpulse { 50% { opacity: 0.6; } }
   .genie-msg { max-width: 82%; padding: 10px 14px; border-radius: 14px;
                font-size: 0.93rem; white-space: pre-wrap; word-break: break-word; }
   .genie-msg.user { align-self: flex-end; background: var(--accent); color: #fff;
                     border-bottom-right-radius: 4px; }
-  .genie-msg.ai { align-self: flex-start; background: #f1f3f7; color: var(--text);
+  .genie-msg.ai { align-self: flex-start; background: var(--fill); color: var(--text);
                   border-bottom-left-radius: 4px; }
   .genie-msg.loading { color: var(--muted); }
   .genie-msg.said-check b { font-weight: 800; }
   .fb-sec { margin: 10px 0; }
   .fb-sec h4 { margin: 0 0 6px; font-size: 0.92rem; }
-  .fb-item { background: #f7f8fb; border-radius: 8px; padding: 9px 12px; margin-bottom: 6px; font-size: 0.88rem; }
-  .fb-item .orig { color: #b42318; text-decoration: line-through; }
-  .fb-item .fixed { color: #067647; font-weight: 700; }
+  .fb-item { background: var(--fill); border-radius: 8px; padding: 9px 12px; margin-bottom: 6px; font-size: 0.88rem; }
+  .fb-item .orig { color: var(--red); text-decoration: line-through; }
+  .fb-item .fixed { color: var(--green); font-weight: 700; }
   .fb-item .why { color: var(--muted); font-size: 0.82rem; }
-  .sent-row { display: flex; align-items: flex-start; gap: 8px; padding: 9px 4px; border-bottom: 1px solid #f0f1f4; }
+  .sent-row { display: flex; align-items: flex-start; gap: 8px; padding: 9px 4px; border-bottom: 1px solid #f4f5f7; }
   .sent-row .txt { flex: 1; }
   .sent-row .en { font-weight: 600; }
   .sent-row .ko { color: var(--muted); font-size: 0.82rem; }
   .sent-row .res { font-size: 0.82rem; margin-top: 3px; }
-  .sent-btn { background: #fff; color: var(--accent); border: 1px solid #dbe3ff;
+  .sent-btn { background: var(--accent-soft); color: var(--accent); border: none;
               border-radius: 8px; padding: 5px 9px; font-size: 0.78rem; font-weight: 700; flex-shrink: 0; }
-  .sent-btn.rec { background: #d92d20; border-color: #d92d20; color: #fff; }
+  .sent-btn.rec { background: var(--red); color: #fff; }
   .flash { text-align: center; padding: 18px 10px; }
   .flash .front { font-size: 1.05rem; font-weight: 700; margin-bottom: 12px; }
   .flash .back { font-size: 1.1rem; color: var(--accent); font-weight: 800; margin: 10px 0; }
   .flash .note { color: var(--muted); font-size: 0.85rem; }
-  .miss { color: #b42318; font-weight: 800; }
-  .hit { color: #067647; }
-  textarea { width: 100%; border: 1px solid var(--line, #dcdfe6); border-radius: 10px;
+  .miss { color: var(--red); font-weight: 800; }
+  .hit { color: var(--green); }
+  textarea { width: 100%; border: 1px solid transparent; background: var(--fill); border-radius: 10px;
              padding: 10px 12px; font: inherit; margin-bottom: 8px; box-sizing: border-box; }
-  .card-row { display: flex; align-items: center; gap: 8px; padding: 7px 2px; border-bottom: 1px solid #f0f1f4; font-size: 0.88rem; }
-  .card-row .box-chip { background: #eef2ff; color: var(--accent); border-radius: 6px; padding: 2px 7px; font-size: 0.75rem; font-weight: 700; flex-shrink: 0; }
+  .card-row { display: flex; align-items: center; gap: 8px; padding: 7px 2px; border-bottom: 1px solid #f4f5f7; font-size: 0.88rem; }
+  .card-row .box-chip { background: var(--accent-soft); color: var(--accent); border-radius: 6px; padding: 2px 7px; font-size: 0.75rem; font-weight: 700; flex-shrink: 0; }
   .card-row .fb { flex: 1; min-width: 0; }
   .link-btn { border: none; background: none; color: var(--muted); cursor: pointer; padding: 2px 6px; }
-  .link-btn:hover { color: #d92d20; }
+  .link-btn:hover { color: var(--red); }
   @media (max-width: 720px) { .talk-card { height: auto; } .talk-log { height: 50vh; } }
 </style>
 <script>
@@ -2344,7 +2344,7 @@ var SCN = __SCENARIO_JSON__;
       btns.style.marginTop = "12px";
       var again = el("button", "", "다시 (오늘 또)");
       again.type = "button";
-      again.style.background = "#d92d20";
+      again.style.background = "var(--red)";
       var good = el("button", "", "알겠음");
       good.type = "button";
       [[again, false], [good, true]].forEach(function (pair) {
@@ -2436,10 +2436,11 @@ def login_page():
         content = ('<div class="card"><p class="error">구글 로그인이 아직 설정되지 않았습니다. '
                    "Vercel 환경변수에 GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET을 추가하세요.</p></div>")
     else:
-        content = f"""<div class="card" style="text-align:center;padding:40px 20px">
-  <p style="margin:0 0 6px;font-weight:800;font-size:1.05rem">회사 전용 서비스입니다</p>
-  <p class="meta" style="margin:0 0 20px">구글 계정으로 로그인해주세요.</p>
-  <a href="{auth.login_url()}"><button type="button" style="padding:11px 28px">Google 계정으로 로그인</button></a>
+        content = f"""<div class="card" style="text-align:center;padding:56px 24px;max-width:420px;margin:9vh auto 0">
+  <p style="margin:0 0 10px;font-weight:800;font-size:1.5rem;letter-spacing:-0.02em">One<b style="color:var(--accent)">AI</b>Gen</p>
+  <p style="margin:0 0 4px;font-weight:700">회사 전용 서비스입니다</p>
+  <p class="meta" style="margin:0 0 28px">구글 계정으로 로그인해주세요.</p>
+  <a href="{auth.login_url()}"><button type="button" style="padding:13px 32px;font-size:1rem;border-radius:12px">Google 계정으로 로그인</button></a>
 </div>"""
     return layout("로그인", "로그인", "", content)
 
@@ -2611,7 +2612,7 @@ def kakao_page():
   <p class="meta">상태: {status} · 알림 키워드: {esc(keywords)}</p>
   <p style="margin:14px 0 4px">
     <a href="{kakao.authorize_url()}"><button type="button">카카오 계정 연결하기</button></a>
-    <a href="/kakao/test" style="margin-left:8px"><button type="button" style="background:#6b7280;border-color:#6b7280">테스트 메시지 보내기</button></a>
+    <a href="/kakao/test" style="margin-left:8px"><button type="button" style="background:var(--fill);border-color:transparent;color:var(--sub)">테스트 메시지 보내기</button></a>
   </p>
   <p class="meta" style="margin-top:12px">연결 후 발급되는 토큰을 Vercel 환경변수(KAKAO_REFRESH_TOKEN)에 넣으면
   매일 아침 8시에 신규 공고 알림이 발송됩니다.</p>
@@ -2639,7 +2640,7 @@ def kakao_callback(code: str = Query("")):
   <p style="margin:4px 0"><b>연결 성공!</b> {sent_note}</p>
   <p style="margin:14px 0 6px">마지막 단계 — 아래 토큰을 Vercel 환경변수에 추가하세요:</p>
   <p class="meta">이름: <b>KAKAO_REFRESH_TOKEN</b></p>
-  <p style="word-break:break-all;background:#f5f6f8;border-radius:8px;padding:12px;font-size:0.85rem">{esc(refresh)}</p>
+  <p style="word-break:break-all;background:var(--fill);border-radius:8px;padding:12px;font-size:0.85rem">{esc(refresh)}</p>
   <p class="meta">Vercel → Settings → Environment Variables → 추가 후 Redeploy 하면 매일 아침 알림이 활성화됩니다.</p>
 </div>"""
     return layout("카카오 연결 완료", "카카오톡 알림", "/kakao", content)
