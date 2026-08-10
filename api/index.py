@@ -1291,7 +1291,48 @@ PDF_PAGE = """<div class="card">
   <div id="edit-status"></div>
   <div id="edit-result"></div>
 </div>
+<div id="viewer" hidden>
+  <div class="viewer-top">
+    <span id="viewer-num">- / -</span>
+    <span class="viewer-tools">
+      <button type="button" id="viewer-zout" title="축소">−</button>
+      <span id="viewer-zoom">100%</span>
+      <button type="button" id="viewer-zin" title="확대">+</button>
+      <button type="button" id="viewer-close" title="닫기 (ESC)">✕</button>
+    </span>
+  </div>
+  <div class="viewer-body" id="viewer-body"><canvas id="viewer-canvas"></canvas></div>
+  <button type="button" id="viewer-prev" class="viewer-nav" title="이전 (←)">‹</button>
+  <button type="button" id="viewer-next" class="viewer-nav" title="다음 (→)">›</button>
+</div>
 <style>
+  #viewer { position: fixed; inset: 0; z-index: 1000; background: rgba(25,31,40,0.93);
+            display: flex; flex-direction: column; }
+  #viewer[hidden] { display: none; }
+  .viewer-top { display: flex; justify-content: space-between; align-items: center;
+                padding: 12px 18px; color: #fff; font-size: 0.9rem; flex-shrink: 0; }
+  .viewer-tools { display: inline-flex; align-items: center; gap: 8px; }
+  .viewer-top button { background: rgba(255,255,255,0.14); border: none; color: #fff;
+                       border-radius: 8px; padding: 6px 13px; font-size: 0.95rem;
+                       cursor: pointer; line-height: 1; }
+  .viewer-top button:hover { background: rgba(255,255,255,0.28); }
+  #viewer-zoom { min-width: 46px; text-align: center; color: rgba(255,255,255,0.8); }
+  .viewer-body { flex: 1; overflow: auto; display: flex; padding: 0 64px 24px; }
+  #viewer-canvas { margin: auto; background: #fff; border-radius: 4px;
+                   box-shadow: 0 8px 40px rgba(0,0,0,0.5); }
+  .viewer-nav { position: fixed; top: 50%; transform: translateY(-50%); z-index: 1001;
+                background: rgba(255,255,255,0.14); color: #fff; border: none;
+                width: 44px; height: 68px; font-size: 1.7rem; border-radius: 10px;
+                cursor: pointer; padding: 0; }
+  .viewer-nav:hover { background: rgba(255,255,255,0.3); }
+  #viewer-prev { left: 10px; }
+  #viewer-next { right: 10px; }
+  .zoom-btn { position: absolute; top: 10px; right: 10px; border: none; cursor: pointer;
+              background: rgba(25,31,40,0.55); color: #fff; border-radius: 6px;
+              width: 24px; height: 22px; padding: 0; display: flex;
+              align-items: center; justify-content: center; opacity: 0; transition: opacity 0.12s; }
+  .pdf-tile:hover .zoom-btn { opacity: 1; }
+  .zoom-btn:hover { background: var(--accent); }
   .pdf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
               gap: 10px; margin-top: 14px; }
   .pdf-tile { position: relative; border: 2px solid var(--line); border-radius: 10px;
@@ -1391,6 +1432,19 @@ PDF_PAGE = """<div class="card">
     tag.appendChild(dot);
     tag.appendChild(document.createTextNode(docs[en.doc].name));
     tile.appendChild(tag);
+    var zb = document.createElement("button");
+    zb.type = "button";
+    zb.className = "zoom-btn";
+    zb.title = "크게 보기 (더블클릭도 가능)";
+    zb.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" '
+      + 'stroke="currentColor" stroke-width="2.4" stroke-linecap="round" '
+      + 'stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>';
+    zb.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      openViewer(pages.indexOf(en));
+    });
+    tile.appendChild(zb);
+    tile.addEventListener("dblclick", function () { openViewer(pages.indexOf(en)); });
     tile.addEventListener("click", function () {
       en.sel = !en.sel;
       tile.classList.toggle("sel", en.sel);
@@ -1545,6 +1599,72 @@ PDF_PAGE = """<div class="card">
       }).catch(function (err) { busy = false; setStatus("분할 실패: " + err, true); });
     }
     next();
+  });
+
+  // ---------- 뷰어 (크게 보기)
+  var viewer = document.getElementById("viewer");
+  var viewerBody = document.getElementById("viewer-body");
+  var viewerCanvas = document.getElementById("viewer-canvas");
+  var vIdx = 0, vZoom = 1, vToken = 0;
+
+  function openViewer(i) {
+    if (i < 0 || i >= pages.length) return;
+    vIdx = i;
+    vZoom = 1;
+    viewer.hidden = false;
+    renderView();
+  }
+  function closeViewer() { viewer.hidden = true; }
+
+  function renderView() {
+    var en = pages[vIdx];
+    if (!en) return;
+    document.getElementById("viewer-num").textContent = (vIdx + 1) + " / " + pages.length;
+    document.getElementById("viewer-zoom").textContent = Math.round(vZoom * 100) + "%";
+    var token = ++vToken;
+    docs[en.doc].js.getPage(en.page + 1).then(function (p) {
+      var base = p.getViewport({ scale: 1 });
+      var rot = (base.rotation + en.rot) % 360;
+      var shape = p.getViewport({ scale: 1, rotation: rot });
+      var fit = Math.min((viewerBody.clientWidth - 40) / shape.width,
+                         (viewerBody.clientHeight - 24) / shape.height);
+      var dpr = window.devicePixelRatio || 1;
+      var vp = p.getViewport({ scale: Math.max(fit, 0.1) * vZoom * dpr, rotation: rot });
+      if (token !== vToken) return;
+      viewerCanvas.width = vp.width;
+      viewerCanvas.height = vp.height;
+      viewerCanvas.style.width = (vp.width / dpr) + "px";
+      viewerCanvas.style.height = (vp.height / dpr) + "px";
+      return p.render({ canvasContext: viewerCanvas.getContext("2d"), viewport: vp }).promise;
+    }).catch(function () {});
+  }
+
+  function viewerStep(delta) {
+    if (!pages.length) return;
+    vIdx = (vIdx + delta + pages.length) % pages.length;
+    renderView();
+  }
+  function viewerZoom(delta) {
+    vZoom = Math.min(3, Math.max(0.5, vZoom + delta));
+    renderView();
+  }
+  document.getElementById("viewer-prev").addEventListener("click", function () { viewerStep(-1); });
+  document.getElementById("viewer-next").addEventListener("click", function () { viewerStep(1); });
+  document.getElementById("viewer-zin").addEventListener("click", function () { viewerZoom(0.25); });
+  document.getElementById("viewer-zout").addEventListener("click", function () { viewerZoom(-0.25); });
+  document.getElementById("viewer-close").addEventListener("click", closeViewer);
+  viewerBody.addEventListener("click", function (e) {
+    if (e.target === viewerBody) closeViewer();  // 배경 클릭 = 닫기
+  });
+  document.addEventListener("keydown", function (e) {
+    if (viewer.hidden) return;
+    if (e.key === "Escape") closeViewer();
+    else if (e.key === "ArrowLeft") viewerStep(-1);
+    else if (e.key === "ArrowRight") viewerStep(1);
+    else if (e.key === "+" || e.key === "=") viewerZoom(0.25);
+    else if (e.key === "-") viewerZoom(-0.25);
+    else return;
+    e.preventDefault();
   });
 })();
 </script>"""

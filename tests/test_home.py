@@ -108,7 +108,8 @@ class RoutingTest(unittest.TestCase):
         r = self.client.get("/pdf", cookies=self.admin_cookie)
         self.assertEqual(r.status_code, 200)
         for marker in ("pdf-run", "edit-add", "edit-grid", "edit-save-sel",
-                       "edit-split-zip", "pdfjs-dist", "pdf-lib"):
+                       "edit-split-zip", "pdfjs-dist", "pdf-lib",
+                       "viewer-canvas", "zoom-btn"):
             self.assertIn(marker, r.text, marker)
 
     def test_admin_dashboard_renders(self):
