@@ -1269,6 +1269,156 @@ PDF_PAGE = """<div class="card">
     });
   });
 })();
+</script>
+<div class="card">
+  <p style="margin:4px 0 6px"><b>PDF 분할 · 페이지 추출</b> — 원하는 페이지만 뽑아내거나,
+  한 페이지씩 전부 나눕니다. 이 기능도 파일이 서버로 전송되지 않습니다.</p>
+  <div class="row" style="margin-top:12px">
+    <input type="file" id="split-file" accept="application/pdf,.pdf" style="flex:1;min-width:200px">
+    <span id="split-info" class="meta" style="margin:0"></span>
+  </div>
+  <div class="row">
+    <input type="text" id="split-range" placeholder="추출할 페이지 (예: 1-3,5,7)" style="flex:1;min-width:200px">
+    <button type="button" id="split-extract">선택 페이지 추출</button>
+    <button type="button" id="split-all">한 페이지씩 전부 분할 (zip)</button>
+  </div>
+  <p class="meta" style="margin-top:10px">전부 분할은 페이지 수만큼 PDF를 만들어 zip으로 묶어드립니다.
+  아주 큰 파일(100MB+)은 메모리를 많이 쓰니 추출 방식을 권장해요.</p>
+  <div id="split-status"></div>
+  <div id="split-result"></div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
+<script>
+(function () {
+  var fileEl = document.getElementById("split-file");
+  var infoEl = document.getElementById("split-info");
+  var rangeEl = document.getElementById("split-range");
+  var statusEl = document.getElementById("split-status");
+  var resultEl = document.getElementById("split-result");
+  var extractBtn = document.getElementById("split-extract");
+  var allBtn = document.getElementById("split-all");
+  var loaded = null;  // { doc, name, pageCount }
+
+  function setStatus(msg, isError) {
+    statusEl.innerHTML = msg
+      ? '<p class="' + (isError ? "error" : "meta") + '">' + msg + "</p>" : "";
+  }
+  function showDownload(blob, filename, label) {
+    resultEl.innerHTML = '<div class="ai-sum" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">'
+      + "<span>" + label + "</span>"
+      + '<a id="split-dl" class="btn-outline" style="padding:7px 16px">내려받기</a></div>';
+    var a = document.getElementById("split-dl");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+  }
+
+  function parseRange(text, max) {
+    var picked = [];
+    var seen = {};
+    var parts = String(text || "").split(",");
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i].trim();
+      if (!p) continue;
+      var m = /^([0-9]+)\\s*-\\s*([0-9]+)$/.exec(p);
+      var from, to;
+      if (m) { from = +m[1]; to = +m[2]; }
+      else if (/^[0-9]+$/.test(p)) { from = to = +p; }
+      else return null;
+      if (from > to) { var t = from; from = to; to = t; }
+      for (var n = from; n <= to; n++) {
+        if (n < 1 || n > max) return null;
+        if (!seen[n]) { seen[n] = true; picked.push(n - 1); }
+      }
+    }
+    return picked.length ? picked : null;
+  }
+
+  fileEl.addEventListener("change", function () {
+    loaded = null;
+    infoEl.textContent = "";
+    resultEl.innerHTML = "";
+    var file = fileEl.files && fileEl.files[0];
+    if (!file) return;
+    setStatus("PDF 읽는 중…");
+    file.arrayBuffer().then(function (buf) {
+      return PDFLib.PDFDocument.load(buf, { ignoreEncryption: false });
+    }).then(function (doc) {
+      loaded = { doc: doc, name: file.name.replace(/\\.pdf$/i, ""),
+                 pageCount: doc.getPageCount() };
+      infoEl.textContent = "총 " + loaded.pageCount + "페이지";
+      setStatus("");
+    }).catch(function (err) {
+      setStatus(/encrypt/i.test(String(err))
+        ? "암호가 걸린 PDF입니다. 암호를 해제한 뒤 사용해주세요."
+        : "PDF를 읽지 못했습니다: " + err, true);
+    });
+  });
+
+  function makePdfWith(pages) {
+    return PDFLib.PDFDocument.create().then(function (out) {
+      return out.copyPages(loaded.doc, pages).then(function (copied) {
+        copied.forEach(function (p) { out.addPage(p); });
+        return out.save();
+      });
+    });
+  }
+
+  extractBtn.addEventListener("click", function () {
+    if (!loaded) { alert("PDF 파일을 먼저 선택해주세요."); return; }
+    var pages = parseRange(rangeEl.value, loaded.pageCount);
+    if (!pages) {
+      alert("페이지 범위를 확인해주세요. 예: 1-3,5 (총 " + loaded.pageCount + "페이지)");
+      return;
+    }
+    extractBtn.disabled = allBtn.disabled = true;
+    setStatus(pages.length + "페이지 추출 중…");
+    makePdfWith(pages).then(function (bytes) {
+      extractBtn.disabled = allBtn.disabled = false;
+      setStatus("");
+      var label = rangeEl.value.trim().replace(/\\s+/g, "");
+      showDownload(new Blob([bytes], { type: "application/pdf" }),
+        loaded.name + "_p" + label + ".pdf",
+        "<b>" + pages.length + "페이지</b> 추출 완료");
+    }).catch(function (err) {
+      extractBtn.disabled = allBtn.disabled = false;
+      setStatus("추출 실패: " + err, true);
+    });
+  });
+
+  allBtn.addEventListener("click", function () {
+    if (!loaded) { alert("PDF 파일을 먼저 선택해주세요."); return; }
+    var total = loaded.pageCount;
+    extractBtn.disabled = allBtn.disabled = true;
+    var files = {};
+    var pad = String(total).length;
+    var i = 0;
+    function next() {
+      if (i >= total) {
+        setStatus("zip 압축 중…");
+        var zipped = fflate.zipSync(files, { level: 0 });  // PDF는 이미 압축돼 있음
+        extractBtn.disabled = allBtn.disabled = false;
+        setStatus("");
+        showDownload(new Blob([zipped], { type: "application/zip" }),
+          loaded.name + "_분할.zip",
+          "<b>" + total + "개</b> PDF로 분할 완료");
+        return;
+      }
+      setStatus((i + 1) + " / " + total + " 페이지 분할 중…");
+      makePdfWith([i]).then(function (bytes) {
+        var num = String(i + 1);
+        while (num.length < pad) num = "0" + num;
+        files[loaded.name + "_" + num + ".pdf"] = new Uint8Array(bytes);
+        i++;
+        setTimeout(next, 0);  // UI 갱신 틈 주기
+      }).catch(function (err) {
+        extractBtn.disabled = allBtn.disabled = false;
+        setStatus((i + 1) + "페이지 분할 실패: " + err, true);
+      });
+    }
+    next();
+  });
+})();
 </script>"""
 
 
