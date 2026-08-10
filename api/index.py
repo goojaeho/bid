@@ -1271,34 +1271,63 @@ PDF_PAGE = """<div class="card">
 })();
 </script>
 <div class="card">
-  <p style="margin:4px 0 6px"><b>PDF 분할 · 페이지 추출</b> — 원하는 페이지만 뽑아내거나,
-  한 페이지씩 전부 나눕니다. 이 기능도 파일이 서버로 전송되지 않습니다.</p>
+  <p style="margin:4px 0 6px"><b>PDF 편집</b> — 페이지를 눈으로 보면서 클릭으로 고르고,
+  여러 PDF를 합치고, 드래그로 순서를 바꿉니다. 파일은 서버로 전송되지 않습니다.</p>
   <div class="row" style="margin-top:12px">
-    <input type="file" id="split-file" accept="application/pdf,.pdf" style="flex:1;min-width:200px">
-    <span id="split-info" class="meta" style="margin:0"></span>
+    <input type="file" id="edit-file" accept="application/pdf,.pdf" multiple style="display:none">
+    <button type="button" id="edit-add">+ PDF 파일 추가</button>
+    <span id="edit-count" class="meta" style="margin:0"></span>
   </div>
-  <div class="row">
-    <input type="text" id="split-range" placeholder="추출할 페이지 (예: 1-3,5,7)" style="flex:1;min-width:200px">
-    <button type="button" id="split-extract">선택 페이지 추출</button>
-    <button type="button" id="split-all">한 페이지씩 전부 분할 (zip)</button>
+  <div class="row" id="edit-tools" hidden>
+    <button type="button" id="edit-save-sel" class="chip chip-save">선택만 저장</button>
+    <button type="button" id="edit-del-sel" class="chip chip-save">선택 삭제 후 저장</button>
+    <button type="button" id="edit-rotate" class="chip chip-save">선택 회전 90°</button>
+    <button type="button" id="edit-save-all" class="chip chip-save">전체 저장 (병합)</button>
+    <button type="button" id="edit-split-zip" class="chip chip-save">한 페이지씩 분할 (zip)</button>
   </div>
-  <p class="meta" style="margin-top:10px">전부 분할은 페이지 수만큼 PDF를 만들어 zip으로 묶어드립니다.
-  아주 큰 파일(100MB+)은 메모리를 많이 쓰니 추출 방식을 권장해요.</p>
-  <div id="split-status"></div>
-  <div id="split-result"></div>
+  <div id="edit-grid" class="pdf-grid"></div>
+  <p class="meta" id="edit-hint" style="margin-top:10px">페이지 클릭 = 선택 / 드래그 = 순서 이동 ·
+  파일을 여러 개 추가하면 이어 붙어서 [전체 저장]으로 병합됩니다.</p>
+  <div id="edit-status"></div>
+  <div id="edit-result"></div>
 </div>
+<style>
+  .pdf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+              gap: 10px; margin-top: 14px; }
+  .pdf-tile { position: relative; border: 2px solid var(--line); border-radius: 10px;
+              padding: 6px 6px 4px; cursor: pointer; background: var(--card); user-select: none; }
+  .pdf-tile.sel { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(49,130,246,0.15); }
+  .pdf-tile.drag-over { border-style: dashed; border-color: var(--accent); }
+  .pdf-tile canvas { width: 100%; display: block; border-radius: 6px; background: #fff;
+                     min-height: 80px; }
+  .pdf-tile .pn { position: absolute; top: 10px; left: 10px; background: rgba(25,31,40,0.65);
+                  color: #fff; font-size: 0.7rem; font-weight: 700; border-radius: 6px;
+                  padding: 1px 7px; }
+  .pdf-tile.sel .pn { background: var(--accent); }
+  .pdf-tile .tag { display: flex; align-items: center; gap: 5px; margin-top: 5px;
+                   font-size: 0.68rem; color: var(--muted); overflow: hidden;
+                   white-space: nowrap; text-overflow: ellipsis; }
+  .pdf-tile .tag i { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
 <script>
 (function () {
-  var fileEl = document.getElementById("split-file");
-  var infoEl = document.getElementById("split-info");
-  var rangeEl = document.getElementById("split-range");
-  var statusEl = document.getElementById("split-status");
-  var resultEl = document.getElementById("split-result");
-  var extractBtn = document.getElementById("split-extract");
-  var allBtn = document.getElementById("split-all");
-  var loaded = null;  // { doc, name, pageCount }
+  if (window.pdfjsLib) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+  }
+  var DOC_COLORS = ["#3182f6", "#05a06d", "#e8720c", "#8345d6", "#d6479c", "#0c8599"];
+  var docs = [];   // {name, lib, js, color}
+  var pages = [];  // {doc, page, rot, sel}
+  var grid = document.getElementById("edit-grid");
+  var statusEl = document.getElementById("edit-status");
+  var resultEl = document.getElementById("edit-result");
+  var tools = document.getElementById("edit-tools");
+  var countEl = document.getElementById("edit-count");
+  var fileEl = document.getElementById("edit-file");
+  var busy = false;
 
   function setStatus(msg, isError) {
     statusEl.innerHTML = msg
@@ -1307,114 +1336,213 @@ PDF_PAGE = """<div class="card">
   function showDownload(blob, filename, label) {
     resultEl.innerHTML = '<div class="ai-sum" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">'
       + "<span>" + label + "</span>"
-      + '<a id="split-dl" class="btn-outline" style="padding:7px 16px">내려받기</a></div>';
-    var a = document.getElementById("split-dl");
+      + '<a class="btn-outline dl" style="padding:7px 16px">내려받기</a></div>';
+    var a = resultEl.querySelector("a.dl");
     a.href = URL.createObjectURL(blob);
     a.download = filename;
   }
-
-  function parseRange(text, max) {
-    var picked = [];
-    var seen = {};
-    var parts = String(text || "").split(",");
-    for (var i = 0; i < parts.length; i++) {
-      var p = parts[i].trim();
-      if (!p) continue;
-      var m = /^([0-9]+)\\s*-\\s*([0-9]+)$/.exec(p);
-      var from, to;
-      if (m) { from = +m[1]; to = +m[2]; }
-      else if (/^[0-9]+$/.test(p)) { from = to = +p; }
-      else return null;
-      if (from > to) { var t = from; from = to; to = t; }
-      for (var n = from; n <= to; n++) {
-        if (n < 1 || n > max) return null;
-        if (!seen[n]) { seen[n] = true; picked.push(n - 1); }
-      }
-    }
-    return picked.length ? picked : null;
+  function updateCount() {
+    var sel = pages.filter(function (p) { return p.sel; }).length;
+    countEl.textContent = pages.length
+      ? "총 " + pages.length + "페이지" + (sel ? " · " + sel + "장 선택됨" : "") : "";
+    tools.hidden = !pages.length;
   }
 
-  fileEl.addEventListener("change", function () {
-    loaded = null;
-    infoEl.textContent = "";
-    resultEl.innerHTML = "";
-    var file = fileEl.files && fileEl.files[0];
-    if (!file) return;
-    setStatus("PDF 읽는 중…");
-    file.arrayBuffer().then(function (buf) {
-      return PDFLib.PDFDocument.load(buf, { ignoreEncryption: false });
-    }).then(function (doc) {
-      loaded = { doc: doc, name: file.name.replace(/\\.pdf$/i, ""),
-                 pageCount: doc.getPageCount() };
-      infoEl.textContent = "총 " + loaded.pageCount + "페이지";
-      setStatus("");
-    }).catch(function (err) {
-      setStatus(/encrypt/i.test(String(err))
-        ? "암호가 걸린 PDF입니다. 암호를 해제한 뒤 사용해주세요."
-        : "PDF를 읽지 못했습니다: " + err, true);
+  // ---------- 썸네일 렌더 (보일 때만)
+  var observer = new IntersectionObserver(function (entries) {
+    entries.forEach(function (en) {
+      if (!en.isIntersecting) return;
+      observer.unobserve(en.target);
+      renderThumb(en.target);
     });
-  });
+  }, { rootMargin: "200px" });
 
-  function makePdfWith(pages) {
-    return PDFLib.PDFDocument.create().then(function (out) {
-      return out.copyPages(loaded.doc, pages).then(function (copied) {
-        copied.forEach(function (p) { out.addPage(p); });
-        return out.save();
+  function renderThumb(tile) {
+    var en = tile._page;
+    if (!en) return;
+    var key = en.doc + ":" + en.page + ":" + en.rot;
+    if (tile._rendered === key) return;
+    tile._rendered = key;
+    docs[en.doc].js.getPage(en.page + 1).then(function (p) {
+      var base = p.getViewport({ scale: 1 });
+      var vp = p.getViewport({ scale: 280 / base.width,   // 표시폭 140px의 2배 (레티나)
+                               rotation: (base.rotation + en.rot) % 360 });
+      var canvas = tile.querySelector("canvas");
+      canvas.width = vp.width;
+      canvas.height = vp.height;
+      return p.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+    }).catch(function () {});
+  }
+
+  function makeTile(en) {
+    var tile = document.createElement("div");
+    tile.className = "pdf-tile";
+    tile.draggable = true;
+    tile._page = en;
+    var canvas = document.createElement("canvas");
+    tile.appendChild(canvas);
+    var pn = document.createElement("span");
+    pn.className = "pn";
+    tile.appendChild(pn);
+    var tag = document.createElement("span");
+    tag.className = "tag";
+    var dot = document.createElement("i");
+    dot.style.background = docs[en.doc].color;
+    tag.appendChild(dot);
+    tag.appendChild(document.createTextNode(docs[en.doc].name));
+    tile.appendChild(tag);
+    tile.addEventListener("click", function () {
+      en.sel = !en.sel;
+      tile.classList.toggle("sel", en.sel);
+      updateCount();
+    });
+    tile.addEventListener("dragstart", function (ev) {
+      ev.dataTransfer.setData("text/plain", String(pages.indexOf(en)));
+      ev.dataTransfer.effectAllowed = "move";
+    });
+    tile.addEventListener("dragover", function (ev) {
+      ev.preventDefault();
+      tile.classList.add("drag-over");
+    });
+    tile.addEventListener("dragleave", function () { tile.classList.remove("drag-over"); });
+    tile.addEventListener("drop", function (ev) {
+      ev.preventDefault();
+      tile.classList.remove("drag-over");
+      var from = +ev.dataTransfer.getData("text/plain");
+      var to = pages.indexOf(en);
+      if (isNaN(from) || from === to) return;
+      var moved = pages.splice(from, 1)[0];
+      pages.splice(to, 0, moved);
+      renderGrid();
+    });
+    return tile;
+  }
+
+  function renderGrid() {
+    grid.innerHTML = "";
+    pages.forEach(function (en, i) {
+      var tile = makeTile(en);
+      tile.classList.toggle("sel", !!en.sel);
+      tile.querySelector(".pn").textContent = i + 1;
+      grid.appendChild(tile);
+      observer.observe(tile);
+    });
+    updateCount();
+  }
+
+  // ---------- 파일 추가
+  document.getElementById("edit-add").addEventListener("click", function () {
+    fileEl.click();
+  });
+  fileEl.addEventListener("change", function () {
+    var files = Array.prototype.slice.call(fileEl.files || []);
+    fileEl.value = "";
+    if (!files.length) return;
+    setStatus("PDF 읽는 중…");
+    resultEl.innerHTML = "";
+    var chain = Promise.resolve();
+    files.forEach(function (file) {
+      chain = chain.then(function () {
+        return file.arrayBuffer().then(function (buf) {
+          var bytes = new Uint8Array(buf);
+          return PDFLib.PDFDocument.load(bytes).then(function (lib) {
+            // pdf.js는 버퍼를 가져가므로 복사본 전달
+            return pdfjsLib.getDocument({ data: bytes.slice() }).promise.then(function (js) {
+              var idx = docs.length;
+              docs.push({ name: file.name.replace(/\.pdf$/i, ""), lib: lib, js: js,
+                          color: DOC_COLORS[idx % DOC_COLORS.length] });
+              for (var i = 0; i < lib.getPageCount(); i++) {
+                pages.push({ doc: idx, page: i, rot: 0, sel: false });
+              }
+            });
+          });
+        }).catch(function (err) {
+          setStatus(/encrypt/i.test(String(err))
+            ? '"' + file.name + '" — 암호가 걸린 PDF입니다. 암호를 해제한 뒤 사용해주세요.'
+            : '"' + file.name + '" 읽기 실패: ' + err, true);
+          throw err;
+        });
       });
     });
-  }
-
-  extractBtn.addEventListener("click", function () {
-    if (!loaded) { alert("PDF 파일을 먼저 선택해주세요."); return; }
-    var pages = parseRange(rangeEl.value, loaded.pageCount);
-    if (!pages) {
-      alert("페이지 범위를 확인해주세요. 예: 1-3,5 (총 " + loaded.pageCount + "페이지)");
-      return;
-    }
-    extractBtn.disabled = allBtn.disabled = true;
-    setStatus(pages.length + "페이지 추출 중…");
-    makePdfWith(pages).then(function (bytes) {
-      extractBtn.disabled = allBtn.disabled = false;
-      setStatus("");
-      var label = rangeEl.value.trim().replace(/\\s+/g, "");
-      showDownload(new Blob([bytes], { type: "application/pdf" }),
-        loaded.name + "_p" + label + ".pdf",
-        "<b>" + pages.length + "페이지</b> 추출 완료");
-    }).catch(function (err) {
-      extractBtn.disabled = allBtn.disabled = false;
-      setStatus("추출 실패: " + err, true);
-    });
+    chain.then(function () { setStatus(""); renderGrid(); }).catch(function () { renderGrid(); });
   });
 
-  allBtn.addEventListener("click", function () {
-    if (!loaded) { alert("PDF 파일을 먼저 선택해주세요."); return; }
-    var total = loaded.pageCount;
-    extractBtn.disabled = allBtn.disabled = true;
+  // ---------- 저장 (pdf-lib로 조립)
+  function buildPdf(list, onProgress) {
+    return PDFLib.PDFDocument.create().then(function (out) {
+      var chain = Promise.resolve();
+      list.forEach(function (en, i) {
+        chain = chain.then(function () {
+          if (onProgress) onProgress(i + 1, list.length);
+          return out.copyPages(docs[en.doc].lib, [en.page]).then(function (c) {
+            var p = c[0];
+            if (en.rot) {
+              p.setRotation(PDFLib.degrees((p.getRotation().angle + en.rot) % 360));
+            }
+            out.addPage(p);
+          });
+        });
+      });
+      return chain.then(function () { return out.save(); });
+    });
+  }
+  function baseName() {
+    return docs.length === 1 ? docs[0].name : docs[0].name + "_외" + (docs.length - 1) + "건";
+  }
+  function saveList(list, filename, label) {
+    if (!list.length) { alert("페이지를 먼저 선택해주세요."); return; }
+    if (busy) return;
+    busy = true;
+    buildPdf(list, function (k, n) { setStatus(k + " / " + n + " 페이지 처리 중…"); })
+      .then(function (bytes) {
+        busy = false;
+        setStatus("");
+        showDownload(new Blob([bytes], { type: "application/pdf" }), filename,
+          "<b>" + list.length + "페이지</b> PDF 저장 완료");
+      }).catch(function (err) { busy = false; setStatus("저장 실패: " + err, true); });
+  }
+
+  document.getElementById("edit-save-sel").addEventListener("click", function () {
+    saveList(pages.filter(function (p) { return p.sel; }), baseName() + "_선택.pdf");
+  });
+  document.getElementById("edit-del-sel").addEventListener("click", function () {
+    var keep = pages.filter(function (p) { return !p.sel; });
+    if (keep.length === pages.length) { alert("삭제할 페이지를 먼저 선택해주세요."); return; }
+    saveList(keep, baseName() + "_편집.pdf");
+  });
+  document.getElementById("edit-save-all").addEventListener("click", function () {
+    saveList(pages.slice(), docs.length > 1 ? baseName() + "_병합.pdf" : baseName() + "_편집.pdf");
+  });
+  document.getElementById("edit-rotate").addEventListener("click", function () {
+    var sel = pages.filter(function (p) { return p.sel; });
+    if (!sel.length) { alert("회전할 페이지를 먼저 선택해주세요."); return; }
+    sel.forEach(function (p) { p.rot = (p.rot + 90) % 360; });
+    renderGrid();
+  });
+  document.getElementById("edit-split-zip").addEventListener("click", function () {
+    if (!pages.length || busy) return;
+    busy = true;
     var files = {};
-    var pad = String(total).length;
+    var pad = String(pages.length).length;
     var i = 0;
     function next() {
-      if (i >= total) {
+      if (i >= pages.length) {
         setStatus("zip 압축 중…");
-        var zipped = fflate.zipSync(files, { level: 0 });  // PDF는 이미 압축돼 있음
-        extractBtn.disabled = allBtn.disabled = false;
+        var zipped = fflate.zipSync(files, { level: 0 });
+        busy = false;
         setStatus("");
         showDownload(new Blob([zipped], { type: "application/zip" }),
-          loaded.name + "_분할.zip",
-          "<b>" + total + "개</b> PDF로 분할 완료");
+          baseName() + "_분할.zip", "<b>" + pages.length + "개</b> PDF로 분할 완료");
         return;
       }
-      setStatus((i + 1) + " / " + total + " 페이지 분할 중…");
-      makePdfWith([i]).then(function (bytes) {
+      setStatus((i + 1) + " / " + pages.length + " 페이지 분할 중…");
+      buildPdf([pages[i]]).then(function (bytes) {
         var num = String(i + 1);
         while (num.length < pad) num = "0" + num;
-        files[loaded.name + "_" + num + ".pdf"] = new Uint8Array(bytes);
+        files[baseName() + "_" + num + ".pdf"] = new Uint8Array(bytes);
         i++;
-        setTimeout(next, 0);  // UI 갱신 틈 주기
-      }).catch(function (err) {
-        extractBtn.disabled = allBtn.disabled = false;
-        setStatus((i + 1) + "페이지 분할 실패: " + err, true);
-      });
+        setTimeout(next, 0);
+      }).catch(function (err) { busy = false; setStatus("분할 실패: " + err, true); });
     }
     next();
   });
