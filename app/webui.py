@@ -41,7 +41,7 @@ def icon(name: str, size: int = 16) -> str:
 PERSONAL_NAV = [
     ("/", "메인", "house"),
     ("/todo", "할 일", "list-checks"),
-    ("/pdf", "PDF 압축", "download"),
+    ("/pdf", "PDF 도구", "download"),
 ]
 OWNER_NAV = [
     ("/reader", "이북 리더", "book-open"),

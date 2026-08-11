@@ -1167,129 +1167,39 @@ def api_todo_delete(request: Request, todo_id: int):
         return {"ok": False, "error": str(e)}
 
 
-PDF_PAGE = """<div class="card">
-  <p style="margin:4px 0 6px"><b>PDF 압축</b> — 파일이 서버로 전송되지 않고 이 브라우저 안에서 압축됩니다.
-  IR 덱처럼 민감한 문서도 안전하고, 100MB가 넘는 큰 파일도 처리됩니다.</p>
-  <div class="row" style="margin-top:12px">
-    <input type="file" id="pdf-file" accept="application/pdf,.pdf" style="flex:1;min-width:200px">
-    <select id="pdf-preset">
-      <option value="/screen">고압축 (화면 공유용)</option>
-      <option value="/ebook" selected>균형 (이메일 첨부용 추천)</option>
-      <option value="/printer">고화질 (인쇄용)</option>
-    </select>
-    <button type="button" id="pdf-run">압축하기</button>
+PDF_PAGE = """<div class="pdf-studio">
+  <div class="pdf-main">
+    <div id="drop-zone">
+      <p style="margin:0 0 6px;font-weight:800;font-size:1.05rem">PDF를 여기로 끌어다 놓으세요</p>
+      <p class="meta" style="margin:0">또는 클릭해서 파일 선택 — 여러 개 가능 · 파일은 서버로 전송되지 않습니다</p>
+    </div>
+    <div id="edit-grid" class="pdf-grid"></div>
+    <p class="meta" id="edit-hint" hidden>페이지 클릭 = 선택 · 드래그 = 순서 이동 · 더블클릭/돋보기 = 크게 보기</p>
   </div>
-  <p class="meta" style="margin-top:10px">첫 사용 시 압축 엔진(16MB)을 한 번 내려받습니다.
-  대용량 파일(100MB+)은 1~3분 정도 걸릴 수 있어요 — 탭을 닫지 마세요.</p>
-  <div id="pdf-status"></div>
-  <div id="pdf-result"></div>
-</div>
-<script>
-(function () {
-  var GS_CDN = "https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/";
-  var workerCode = [
-    'importScripts("' + GS_CDN + 'gs.js");',
-    'self.onmessage = function (e) {',
-    '  var buf = e.data.buf, preset = e.data.preset;',
-    '  Module({ noInitialRun: true,',
-    '    locateFile: function (f) { return "' + GS_CDN + '" + f; },',
-    '    print: function (t) {',
-    '      var m = /^Page ([0-9]+)/.exec(t);',
-    '      if (m) postMessage({ type: "page", page: +m[1] });',
-    '    },',
-    '    printErr: function () {} })',
-    '  .then(function (gs) {',
-    '    gs.FS.writeFile("in.pdf", new Uint8Array(buf));',
-    '    var code = gs.callMain(["-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.5",',
-    '      "-dPDFSETTINGS=" + preset, "-dNOPAUSE", "-dBATCH",',
-    '      "-sOutputFile=out.pdf", "in.pdf"]);',
-    '    if (code !== 0) { postMessage({ type: "error", message: "압축 실패 (코드 " + code + ")" }); return; }',
-    '    var out = gs.FS.readFile("out.pdf");',
-    '    postMessage({ type: "done", out: out.buffer }, [out.buffer]);',
-    '  })',
-    '  .catch(function (err) { postMessage({ type: "error", message: String(err) }); });',
-    '};',
-  ].join("\\n");
-
-  function mb(n) { return (n / 1048576).toFixed(2) + " MB"; }
-  var statusEl = document.getElementById("pdf-status");
-  var resultEl = document.getElementById("pdf-result");
-  var runBtn = document.getElementById("pdf-run");
-  var timer = null;
-
-  runBtn.addEventListener("click", function () {
-    var fileInput = document.getElementById("pdf-file");
-    var file = fileInput.files && fileInput.files[0];
-    if (!file) { alert("PDF 파일을 선택해주세요."); return; }
-    var preset = document.getElementById("pdf-preset").value;
-    runBtn.disabled = true;
-    resultEl.innerHTML = "";
-    var start = Date.now(), lastPage = 0;
-    function setStatus(extra) {
-      var sec = Math.round((Date.now() - start) / 1000);
-      statusEl.innerHTML = '<p class="meta">' + extra + " · " + sec + "초 경과</p>";
-    }
-    setStatus("압축 엔진 로딩 중…");
-    timer = setInterval(function () {
-      setStatus(lastPage ? lastPage + "페이지 처리 중…" : "압축 엔진 로딩 중…");
-    }, 1000);
-
-    file.arrayBuffer().then(function (buf) {
-      var origSize = buf.byteLength;
-      var worker = new Worker(URL.createObjectURL(
-        new Blob([workerCode], { type: "text/javascript" })));
-      worker.onmessage = function (e) {
-        var d = e.data;
-        if (d.type === "page") { lastPage = d.page; return; }
-        clearInterval(timer);
-        runBtn.disabled = false;
-        worker.terminate();
-        if (d.type === "error") {
-          statusEl.innerHTML = '<p class="error">' + d.message + "</p>";
-          return;
-        }
-        var outBlob = new Blob([d.out], { type: "application/pdf" });
-        var name = file.name.replace(/\\.pdf$/i, "") + "_압축.pdf";
-        var saved = 100 * (1 - outBlob.size / origSize);
-        statusEl.innerHTML = "";
-        resultEl.innerHTML = '<div class="ai-sum" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">'
-          + "<span><b>" + mb(origSize) + "</b> → <b>" + mb(outBlob.size) + "</b> ("
-          + (saved > 0 ? saved.toFixed(0) + "% 절감" : "절감 없음") + ")</span>"
-          + '<a id="pdf-dl" class="btn-outline" style="padding:7px 16px">내려받기</a></div>';
-        var a = document.getElementById("pdf-dl");
-        a.href = URL.createObjectURL(outBlob);
-        a.download = name;
-      };
-      worker.onerror = function (err) {
-        clearInterval(timer);
-        runBtn.disabled = false;
-        statusEl.innerHTML = '<p class="error">엔진 오류: ' + (err.message || err) + "</p>";
-      };
-      worker.postMessage({ buf: buf, preset: preset }, [buf]);
-    });
-  });
-})();
-</script>
-<div class="card">
-  <p style="margin:4px 0 6px"><b>PDF 편집</b> — 페이지를 눈으로 보면서 클릭으로 고르고,
-  여러 PDF를 합치고, 드래그로 순서를 바꿉니다. 파일은 서버로 전송되지 않습니다.</p>
-  <div class="row" style="margin-top:12px">
+  <aside class="pdf-panel">
     <input type="file" id="edit-file" accept="application/pdf,.pdf" multiple style="display:none">
-    <button type="button" id="edit-add">+ PDF 파일 추가</button>
-    <span id="edit-count" class="meta" style="margin:0"></span>
-  </div>
-  <div class="row" id="edit-tools" hidden>
-    <button type="button" id="edit-save-sel" class="chip chip-save">선택만 저장</button>
-    <button type="button" id="edit-del-sel" class="chip chip-save">선택 삭제 후 저장</button>
-    <button type="button" id="edit-rotate" class="chip chip-save">선택 회전 90°</button>
-    <button type="button" id="edit-save-all" class="chip chip-save">전체 저장 (병합)</button>
-    <button type="button" id="edit-split-zip" class="chip chip-save">한 페이지씩 분할 (zip)</button>
-  </div>
-  <div id="edit-grid" class="pdf-grid"></div>
-  <p class="meta" id="edit-hint" style="margin-top:10px">페이지 클릭 = 선택 / 드래그 = 순서 이동 ·
-  파일을 여러 개 추가하면 이어 붙어서 [전체 저장]으로 병합됩니다.</p>
-  <div id="edit-status"></div>
-  <div id="edit-result"></div>
+    <button type="button" id="edit-add" style="width:100%">+ PDF 파일 추가</button>
+    <div id="file-list"></div>
+    <div id="edit-count" class="meta" style="margin:0"></div>
+    <div id="edit-tools" hidden>
+      <div class="panel-h">편집</div>
+      <button type="button" id="edit-save-sel" class="tool-btn">선택만 저장</button>
+      <button type="button" id="edit-del-sel" class="tool-btn">선택 삭제 후 저장</button>
+      <button type="button" id="edit-rotate" class="tool-btn">선택 회전 90°</button>
+      <button type="button" id="edit-save-all" class="tool-btn">전체 저장 (병합)</button>
+      <button type="button" id="edit-split-zip" class="tool-btn">한 페이지씩 분할 (zip)</button>
+      <div class="panel-h">압축</div>
+      <select id="pdf-preset" class="tool-sel">
+        <option value="/screen">고압축 (화면 공유용)</option>
+        <option value="/ebook" selected>균형 (이메일 첨부용 추천)</option>
+        <option value="/printer">고화질 (인쇄용)</option>
+      </select>
+      <button type="button" id="edit-compress" class="tool-btn tool-primary">압축해서 저장</button>
+      <p class="meta" style="margin:4px 0 0">첫 압축 시 엔진(16MB)을 한 번 내려받습니다. 현재 작업 공간 전체(순서·회전·삭제 반영)가 압축됩니다.</p>
+    </div>
+    <div id="edit-status"></div>
+    <div id="edit-result"></div>
+  </aside>
 </div>
 <div id="viewer" hidden>
   <div class="viewer-top">
@@ -1306,6 +1216,34 @@ PDF_PAGE = """<div class="card">
   <button type="button" id="viewer-next" class="viewer-nav" title="다음 (→)">›</button>
 </div>
 <style>
+  .pdf-studio { display: flex; gap: 16px; align-items: flex-start; }
+  .pdf-main { flex: 1; min-width: 0; }
+  .pdf-panel { width: 252px; flex-shrink: 0; background: var(--card);
+               border-radius: var(--r-lg); box-shadow: var(--shadow); padding: 16px;
+               position: sticky; top: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .panel-h { font-size: 0.75rem; font-weight: 800; color: var(--muted);
+             margin: 10px 0 2px; letter-spacing: 0.03em; }
+  .tool-btn { width: 100%; text-align: left; background: var(--fill); color: var(--sub);
+              border: none; border-radius: 10px; padding: 9px 12px; font-size: 0.86rem;
+              font-weight: 700; cursor: pointer; }
+  .tool-btn:hover { background: var(--accent-soft); color: var(--accent); }
+  .tool-btn.tool-primary { background: var(--accent); color: #fff; }
+  .tool-btn.tool-primary:hover { background: var(--accent-dark); }
+  .tool-sel { width: 100%; }
+  .file-row { display: flex; align-items: center; gap: 6px; font-size: 0.8rem;
+              color: var(--sub); padding: 3px 2px; }
+  .file-row i { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .file-row .fn { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .file-row button { border: none; background: none; color: var(--muted); cursor: pointer;
+                     padding: 0 4px; font-size: 0.9rem; line-height: 1; }
+  .file-row button:hover { color: var(--red); background: none; }
+  #drop-zone { border: 2px dashed var(--line); border-radius: var(--r-lg);
+               padding: 84px 20px; text-align: center; cursor: pointer;
+               background: var(--card); transition: border-color 0.12s, background 0.12s; }
+  #drop-zone:hover { border-color: var(--accent); }
+  #drop-zone[hidden] { display: none; }
+  body.dragging #drop-zone { display: block !important; border-color: var(--accent);
+                             background: var(--accent-soft); margin-bottom: 14px; }
   #viewer { position: fixed; inset: 0; z-index: 1000; background: rgba(25,31,40,0.93);
             display: flex; flex-direction: column; }
   #viewer[hidden] { display: none; }
@@ -1334,7 +1272,7 @@ PDF_PAGE = """<div class="card">
   .pdf-tile:hover .zoom-btn { opacity: 1; }
   .zoom-btn:hover { background: var(--accent); }
   .pdf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-              gap: 10px; margin-top: 14px; }
+              gap: 10px; }
   .pdf-tile { position: relative; border: 2px solid var(--line); border-radius: 10px;
               padding: 6px 6px 4px; cursor: pointer; background: var(--card); user-select: none; }
   .pdf-tile.sel { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(49,130,246,0.15); }
@@ -1349,6 +1287,10 @@ PDF_PAGE = """<div class="card">
                    font-size: 0.68rem; color: var(--muted); overflow: hidden;
                    white-space: nowrap; text-overflow: ellipsis; }
   .pdf-tile .tag i { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  @media (max-width: 900px) {
+    .pdf-studio { flex-direction: column-reverse; }
+    .pdf-panel { width: auto; position: static; }
+  }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
@@ -1359,8 +1301,33 @@ PDF_PAGE = """<div class="card">
     pdfjsLib.GlobalWorkerOptions.workerSrc =
       "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
   }
+  var GS_CDN = "https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/";
+  var gsWorkerCode = [
+    'importScripts("' + GS_CDN + 'gs.js");',
+    'self.onmessage = function (e) {',
+    '  var buf = e.data.buf, preset = e.data.preset;',
+    '  Module({ noInitialRun: true,',
+    '    locateFile: function (f) { return "' + GS_CDN + '" + f; },',
+    '    print: function (t) {',
+    '      var m = /^Page ([0-9]+)/.exec(t);',
+    '      if (m) postMessage({ type: "page", page: +m[1] });',
+    '    },',
+    '    printErr: function () {} })',
+    '  .then(function (gs) {',
+    '    gs.FS.writeFile("in.pdf", new Uint8Array(buf));',
+    '    var code = gs.callMain(["-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.5",',
+    '      "-dPDFSETTINGS=" + preset, "-dNOPAUSE", "-dBATCH",',
+    '      "-sOutputFile=out.pdf", "in.pdf"]);',
+    '    if (code !== 0) { postMessage({ type: "error", message: "압축 실패 (코드 " + code + ")" }); return; }',
+    '    var out = gs.FS.readFile("out.pdf");',
+    '    postMessage({ type: "done", out: out.buffer }, [out.buffer]);',
+    '  })',
+    '  .catch(function (err) { postMessage({ type: "error", message: String(err) }); });',
+    '};',
+  ].join("\\n");
+
   var DOC_COLORS = ["#3182f6", "#05a06d", "#e8720c", "#8345d6", "#d6479c", "#0c8599"];
-  var docs = [];   // {name, lib, js, color}
+  var docs = [];   // {name, lib, js, color, pageCount, removed}
   var pages = [];  // {doc, page, rot, sel}
   var grid = document.getElementById("edit-grid");
   var statusEl = document.getElementById("edit-status");
@@ -1368,16 +1335,19 @@ PDF_PAGE = """<div class="card">
   var tools = document.getElementById("edit-tools");
   var countEl = document.getElementById("edit-count");
   var fileEl = document.getElementById("edit-file");
+  var dropZone = document.getElementById("drop-zone");
+  var fileListEl = document.getElementById("file-list");
   var busy = false;
 
+  function mb(n) { return (n / 1048576).toFixed(2) + " MB"; }
   function setStatus(msg, isError) {
     statusEl.innerHTML = msg
-      ? '<p class="' + (isError ? "error" : "meta") + '">' + msg + "</p>" : "";
+      ? '<p class="' + (isError ? "error" : "meta") + '" style="margin:6px 0 0">' + msg + "</p>" : "";
   }
   function showDownload(blob, filename, label) {
-    resultEl.innerHTML = '<div class="ai-sum" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">'
-      + "<span>" + label + "</span>"
-      + '<a class="btn-outline dl" style="padding:7px 16px">내려받기</a></div>';
+    resultEl.innerHTML = '<div class="ai-sum" style="margin-top:8px;padding:10px 12px">'
+      + "<div>" + label + "</div>"
+      + '<a class="btn-outline dl" style="display:inline-block;margin-top:8px;padding:7px 16px">내려받기</a></div>';
     var a = resultEl.querySelector("a.dl");
     a.href = URL.createObjectURL(blob);
     a.download = filename;
@@ -1387,6 +1357,36 @@ PDF_PAGE = """<div class="card">
     countEl.textContent = pages.length
       ? "총 " + pages.length + "페이지" + (sel ? " · " + sel + "장 선택됨" : "") : "";
     tools.hidden = !pages.length;
+    dropZone.hidden = !!pages.length;
+    document.getElementById("edit-hint").hidden = !pages.length;
+  }
+  function renderFileList() {
+    fileListEl.innerHTML = "";
+    docs.forEach(function (d, idx) {
+      if (d.removed) return;
+      var row = document.createElement("div");
+      row.className = "file-row";
+      var dot = document.createElement("i");
+      dot.style.background = d.color;
+      row.appendChild(dot);
+      var fn = document.createElement("span");
+      fn.className = "fn";
+      fn.textContent = d.name + " (" + d.pageCount + "p)";
+      fn.title = d.name;
+      row.appendChild(fn);
+      var x = document.createElement("button");
+      x.type = "button";
+      x.textContent = "×";
+      x.title = "이 파일 제거";
+      x.addEventListener("click", function () {
+        d.removed = true;
+        pages = pages.filter(function (p) { return p.doc !== idx; });
+        renderGrid();
+        renderFileList();
+      });
+      row.appendChild(x);
+      fileListEl.appendChild(row);
+    });
   }
 
   // ---------- 썸네일 렌더 (보일 때만)
@@ -1406,7 +1406,7 @@ PDF_PAGE = """<div class="card">
     tile._rendered = key;
     docs[en.doc].js.getPage(en.page + 1).then(function (p) {
       var base = p.getViewport({ scale: 1 });
-      var vp = p.getViewport({ scale: 280 / base.width,   // 표시폭 140px의 2배 (레티나)
+      var vp = p.getViewport({ scale: 280 / base.width,
                                rotation: (base.rotation + en.rot) % 360 });
       var canvas = tile.querySelector("canvas");
       canvas.width = vp.width;
@@ -1461,6 +1461,7 @@ PDF_PAGE = """<div class="card">
     tile.addEventListener("dragleave", function () { tile.classList.remove("drag-over"); });
     tile.addEventListener("drop", function (ev) {
       ev.preventDefault();
+      ev.stopPropagation();
       tile.classList.remove("drag-over");
       var from = +ev.dataTransfer.getData("text/plain");
       var to = pages.indexOf(en);
@@ -1484,13 +1485,8 @@ PDF_PAGE = """<div class="card">
     updateCount();
   }
 
-  // ---------- 파일 추가
-  document.getElementById("edit-add").addEventListener("click", function () {
-    fileEl.click();
-  });
-  fileEl.addEventListener("change", function () {
-    var files = Array.prototype.slice.call(fileEl.files || []);
-    fileEl.value = "";
+  // ---------- 파일 추가 (버튼·드롭 공용)
+  function addFiles(files) {
     if (!files.length) return;
     setStatus("PDF 읽는 중…");
     resultEl.innerHTML = "";
@@ -1504,7 +1500,8 @@ PDF_PAGE = """<div class="card">
             return pdfjsLib.getDocument({ data: bytes.slice() }).promise.then(function (js) {
               var idx = docs.length;
               docs.push({ name: file.name.replace(/\.pdf$/i, ""), lib: lib, js: js,
-                          color: DOC_COLORS[idx % DOC_COLORS.length] });
+                          color: DOC_COLORS[idx % DOC_COLORS.length],
+                          pageCount: lib.getPageCount(), removed: false });
               for (var i = 0; i < lib.getPageCount(); i++) {
                 pages.push({ doc: idx, page: i, rot: 0, sel: false });
               }
@@ -1518,7 +1515,46 @@ PDF_PAGE = """<div class="card">
         });
       });
     });
-    chain.then(function () { setStatus(""); renderGrid(); }).catch(function () { renderGrid(); });
+    chain.then(function () { setStatus(""); }).catch(function () {})
+      .then(function () { renderGrid(); renderFileList(); });
+  }
+  document.getElementById("edit-add").addEventListener("click", function () { fileEl.click(); });
+  dropZone.addEventListener("click", function () { fileEl.click(); });
+  fileEl.addEventListener("change", function () {
+    var files = Array.prototype.slice.call(fileEl.files || []);
+    fileEl.value = "";
+    addFiles(files);
+  });
+
+  // ---------- 폴더에서 드래그&드롭
+  function hasFiles(e) {
+    return e.dataTransfer
+      && Array.prototype.indexOf.call(e.dataTransfer.types, "Files") !== -1;
+  }
+  var dragDepth = 0;
+  document.addEventListener("dragenter", function (e) {
+    if (!hasFiles(e)) return;
+    dragDepth++;
+    document.body.classList.add("dragging");
+  });
+  document.addEventListener("dragleave", function (e) {
+    if (!hasFiles(e)) return;
+    dragDepth--;
+    if (dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("dragging"); }
+  });
+  document.addEventListener("dragover", function (e) {
+    if (hasFiles(e)) e.preventDefault();
+  });
+  document.addEventListener("drop", function (e) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    document.body.classList.remove("dragging");
+    var files = Array.prototype.slice.call(e.dataTransfer.files).filter(function (f) {
+      return f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+    });
+    if (!files.length) { setStatus("PDF 파일만 넣을 수 있습니다.", true); return; }
+    addFiles(files);
   });
 
   // ---------- 저장 (pdf-lib로 조립)
@@ -1541,9 +1577,11 @@ PDF_PAGE = """<div class="card">
     });
   }
   function baseName() {
-    return docs.length === 1 ? docs[0].name : docs[0].name + "_외" + (docs.length - 1) + "건";
+    var live = docs.filter(function (d) { return !d.removed; });
+    if (!live.length) return "문서";
+    return live.length === 1 ? live[0].name : live[0].name + "_외" + (live.length - 1) + "건";
   }
-  function saveList(list, filename, label) {
+  function saveList(list, filename) {
     if (!list.length) { alert("페이지를 먼저 선택해주세요."); return; }
     if (busy) return;
     busy = true;
@@ -1565,7 +1603,8 @@ PDF_PAGE = """<div class="card">
     saveList(keep, baseName() + "_편집.pdf");
   });
   document.getElementById("edit-save-all").addEventListener("click", function () {
-    saveList(pages.slice(), docs.length > 1 ? baseName() + "_병합.pdf" : baseName() + "_편집.pdf");
+    var live = docs.filter(function (d) { return !d.removed; });
+    saveList(pages.slice(), live.length > 1 ? baseName() + "_병합.pdf" : baseName() + "_편집.pdf");
   });
   document.getElementById("edit-rotate").addEventListener("click", function () {
     var sel = pages.filter(function (p) { return p.sel; });
@@ -1599,6 +1638,54 @@ PDF_PAGE = """<div class="card">
       }).catch(function (err) { busy = false; setStatus("분할 실패: " + err, true); });
     }
     next();
+  });
+
+  // ---------- 압축 (작업 공간 전체 → Ghostscript)
+  document.getElementById("edit-compress").addEventListener("click", function () {
+    if (!pages.length || busy) return;
+    busy = true;
+    resultEl.innerHTML = "";
+    var preset = document.getElementById("pdf-preset").value;
+    var start = Date.now(), lastPage = 0, timer = null;
+    function tick(prefix) {
+      var sec = Math.round((Date.now() - start) / 1000);
+      setStatus(prefix + " · " + sec + "초 경과");
+    }
+    buildPdf(pages.slice(), function (k, n) { setStatus("압축용 PDF 조립 중… " + k + "/" + n); })
+      .then(function (bytes) {
+        var origSize = bytes.byteLength;
+        tick("압축 엔진 로딩 중…");
+        timer = setInterval(function () {
+          tick(lastPage ? lastPage + "페이지 처리 중…" : "압축 엔진 로딩 중…");
+        }, 1000);
+        var worker = new Worker(URL.createObjectURL(
+          new Blob([gsWorkerCode], { type: "text/javascript" })));
+        worker.onmessage = function (e) {
+          var d = e.data;
+          if (d.type === "page") { lastPage = d.page; return; }
+          clearInterval(timer);
+          busy = false;
+          worker.terminate();
+          if (d.type === "error") { setStatus(d.message, true); return; }
+          var outBlob = new Blob([d.out], { type: "application/pdf" });
+          var saved = 100 * (1 - outBlob.size / origSize);
+          setStatus("");
+          showDownload(outBlob, baseName() + "_압축.pdf",
+            "<b>" + mb(origSize) + "</b> → <b>" + mb(outBlob.size) + "</b><br>"
+            + (saved > 0 ? saved.toFixed(0) + "% 절감" : "절감 없음"));
+        };
+        worker.onerror = function (err) {
+          clearInterval(timer);
+          busy = false;
+          setStatus("엔진 오류: " + (err.message || err), true);
+        };
+        worker.postMessage({ buf: bytes.buffer, preset: preset }, [bytes.buffer]);
+      })
+      .catch(function (err) {
+        if (timer) clearInterval(timer);
+        busy = false;
+        setStatus("압축 실패: " + err, true);
+      });
   });
 
   // ---------- 뷰어 (크게 보기)
@@ -2824,7 +2911,7 @@ def pdf_page(request: Request):
     user = user_of(request)
     if not auth.is_admin(user):
         return RedirectResponse("/bid", status_code=302)
-    return layout("PDF 압축", icon("download", 20) + " PDF 압축", "/pdf",
+    return layout("PDF 도구", icon("download", 20) + " PDF 도구", "/pdf",
                   PDF_PAGE, user=user, admin=True)
 
 
