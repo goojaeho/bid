@@ -124,6 +124,20 @@ MIGRATIONS: list[tuple[int, str]] = [
         create index if not exists english_cards_due_idx
           on english_cards (email, due_date);
     """),
+    (10, """
+        create table if not exists meetings (
+          id bigint generated always as identity primary key,
+          email text not null,
+          title text not null default '',
+          mode text not null default 'offline',
+          transcript text not null default '',
+          minutes jsonb,
+          duration_sec int not null default 0,
+          created_at timestamptz not null default now()
+        );
+        create index if not exists meetings_email_idx
+          on meetings (email, created_at desc);
+    """),
 ]
 
 _ran = False

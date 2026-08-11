@@ -341,6 +341,65 @@ def gemini_polish_script(text: str) -> dict:
     return {"title": str(out.get("title", "")).strip()[:100], "sentences": sentences}
 
 
+TRANSCRIBE_PROMPT = (
+    "다음 오디오는 회의 녹음의 일부입니다. 들리는 내용을 한국어로 정확히 전사하세요. "
+    "화자가 바뀌는 것 같으면 새 줄에 '- '로 시작해 구분하고, 영어 등 외국어 발화는 "
+    "그대로 적으세요. 추임새(음, 어 등)는 생략하고, 전사 텍스트만 출력하세요. "
+    "알아들을 수 없는 부분은 (불명확)으로 표시하세요."
+)
+
+
+def gemini_transcribe_audio(data: bytes, mime: str = "audio/webm") -> str:
+    """회의 녹음 조각(≤20MB)을 한국어로 전사."""
+    import base64
+
+    payload = {
+        "contents": [{"parts": [
+            {"text": TRANSCRIBE_PROMPT},
+            {"inline_data": {"mime_type": mime.split(";")[0] or "audio/webm",
+                             "data": base64.b64encode(data).decode()}},
+        ]}],
+    }
+    result = _gemini_call(payload, kind="meeting", timeout=180)
+    return _first_text(result)
+
+
+MINUTES_PROMPT = """다음은 회의 녹음을 전사한 텍스트입니다. 아래 JSON 형식으로만 회의록을 작성하세요.
+내용은 모두 한국어로, 해당 내용이 없으면 빈 배열/빈 문자열로 두세요.
+
+{"title": "회의 제목 (내용 기반, 15자 내외)",
+ "attendees": ["파악된 참석자/화자"],
+ "summary": ["주요 논의 내용 (핵심만 5~10개)"],
+ "decisions": ["결정된 사항"],
+ "action_items": [{"task": "할 일", "owner": "담당(불명확하면 빈 문자열)", "due": "기한(언급됐으면)"}]}
+
+전사 텍스트:
+"""
+
+
+def gemini_minutes(transcript: str) -> dict:
+    """전사 전체 → 구조화된 회의록 (JSON)."""
+    data = _gemini_call({
+        "contents": [{"parts": [{"text": MINUTES_PROMPT + transcript[:100000]}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }, kind="meeting", timeout=120)
+    try:
+        out = json.loads(_first_text(data))
+    except json.JSONDecodeError:
+        raise SummarizeError("회의록 생성 실패 — 다시 시도해주세요.")
+    return {
+        "title": str(out.get("title", "")).strip()[:200],
+        "attendees": [str(a) for a in (out.get("attendees") or [])][:20],
+        "summary": [str(s) for s in (out.get("summary") or [])][:20],
+        "decisions": [str(d) for d in (out.get("decisions") or [])][:20],
+        "action_items": [
+            {"task": str(i.get("task", "")), "owner": str(i.get("owner", "")),
+             "due": str(i.get("due", ""))}
+            for i in (out.get("action_items") or []) if isinstance(i, dict)
+        ][:20],
+    }
+
+
 def gemini_translate_paragraphs(paragraphs: list[dict]) -> list[dict]:
     """[{id, text}] 목록을 한국어로 번역해 같은 형식으로 반환 (Gemini JSON 모드)."""
     key = gemini_key()

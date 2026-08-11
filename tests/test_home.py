@@ -9,7 +9,7 @@ os.environ["G2B_SERVICE_KEY"] = "dummy"
 from fastapi.testclient import TestClient
 
 import api.index as web
-from app import auth, english, genie, searches, summarize, todos
+from app import auth, english, genie, meetings, searches, summarize, todos
 from app.store import StoreError
 
 KST = ZoneInfo("Asia/Seoul")
@@ -395,6 +395,80 @@ class EnglishTest(unittest.TestCase):
         self.assertEqual(d["session_id"], 11)
         self.assertEqual(saved[11]["messages"],
                          [{"role": "model", "text": "Hi! Tell me about yourself."}])
+
+
+class MeetingTest(unittest.TestCase):
+    """회의록 — 녹음 조각 전사·회의록 생성 API (관리자 전용)."""
+
+    def setUp(self):
+        os.environ["GOOGLE_CLIENT_ID"] = "cid"
+        os.environ["GOOGLE_CLIENT_SECRET"] = "sec"
+        os.environ["ADMIN_EMAILS"] = "boss@company.com"
+        self.client = TestClient(web.app)
+        self.admin_cookie = {auth.COOKIE_NAME: auth.make_session("boss@company.com")}
+        self.user_cookie = {auth.COOKIE_NAME: auth.make_session("guest@gmail.com")}
+
+    def tearDown(self):
+        for k in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "ADMIN_EMAILS"):
+            os.environ.pop(k, None)
+
+    def test_non_admin_blocked(self):
+        r = self.client.get("/meeting", cookies=self.user_cookie,
+                            follow_redirects=False)
+        self.assertEqual((r.status_code, r.headers["location"]), (302, "/bid"))
+        r = self.client.get("/api/meetings", cookies=self.user_cookie)
+        self.assertFalse(r.json()["ok"])
+
+    def test_page_renders(self):
+        r = self.client.get("/meeting", cookies=self.admin_cookie)
+        self.assertEqual(r.status_code, 200)
+        for marker in ("mt-setup", "mt-mode", "오프라인 회의", "온라인 회의",
+                       "mt-stop", "mt-list", "탭 오디오 공유", "시스템 오디오"):
+            self.assertIn(marker, r.text, marker)
+
+    def test_chunk_transcribes_and_appends(self):
+        captured = {}
+        with patch.object(summarize, "gemini_transcribe_audio",
+                          return_value="- 안녕하세요 회의 시작하겠습니다") as tr, \
+             patch.object(meetings, "append_transcript",
+                          side_effect=lambda e, i, t: captured.update({i: t})):
+            r = self.client.post("/api/meetings/5/chunk", cookies=self.admin_cookie,
+                                 content=b"x" * 3000,
+                                 headers={"Content-Type": "audio/webm"})
+        self.assertTrue(r.json()["ok"])
+        self.assertEqual(tr.call_args[0][1], "audio/webm")
+        self.assertIn("회의 시작", captured[5])
+
+    def test_tiny_chunk_skipped(self):
+        r = self.client.post("/api/meetings/5/chunk", cookies=self.admin_cookie,
+                             content=b"x" * 100,
+                             headers={"Content-Type": "audio/webm"})
+        self.assertEqual(r.json(), {"ok": True, "skipped": True})
+
+    def test_finish_builds_minutes(self):
+        saved = {}
+        minutes = {"title": "주간 회의", "attendees": ["구대표"],
+                   "summary": ["논의1"], "decisions": [], "action_items": []}
+        with patch.object(meetings, "get_meeting",
+                          return_value={"id": 5, "transcript": "충분히 긴 전사 내용 " * 10}), \
+             patch.object(summarize, "gemini_minutes", return_value=minutes), \
+             patch.object(meetings, "finish_meeting",
+                          side_effect=lambda e, i, t, m, d: saved.update(
+                              title=t, minutes=m, dur=d)):
+            r = self.client.post("/api/meetings/5/finish", cookies=self.admin_cookie,
+                                 json={"duration_sec": 1800})
+        d = r.json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["minutes"]["title"], "주간 회의")
+        self.assertEqual(saved["title"], "주간 회의")
+        self.assertEqual(saved["dur"], 1800)
+
+    def test_finish_rejects_empty_transcript(self):
+        with patch.object(meetings, "get_meeting",
+                          return_value={"id": 5, "transcript": "짧음"}):
+            r = self.client.post("/api/meetings/5/finish", cookies=self.admin_cookie,
+                                 json={"duration_sec": 60})
+        self.assertFalse(r.json()["ok"])
 
 
 if __name__ == "__main__":

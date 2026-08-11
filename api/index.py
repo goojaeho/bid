@@ -25,8 +25,8 @@ from fastapi.responses import RedirectResponse
 
 from fastapi import Body
 
-from app import (auth, english, genie, gov_sources, kakao, migrations, searches,
-                 store, summarize, todos)
+from app import (auth, english, genie, gov_sources, kakao, meetings, migrations,
+                 searches, store, summarize, todos)
 from app.g2b_client import CATEGORIES, G2BApiError, G2BClient
 from app.webui import icon, layout
 
@@ -2913,6 +2913,494 @@ def pdf_page(request: Request):
         return RedirectResponse("/bid", status_code=302)
     return layout("PDF 도구", icon("download", 20) + " PDF 도구", "/pdf",
                   PDF_PAGE, user=user, admin=True)
+
+
+# ------------------------------------------------- 회의록 (녹음 → 자동 회의록)
+
+MEETING_PAGE = """<div id="mt-setup">
+  <p class="meta">모드를 선택하면 바로 녹음이 시작됩니다. 녹음 중에는 이 브라우저 탭을 닫지 마세요 —
+  소리는 10분 단위로 잘라 자동 전사되고, 종료하면 회의록이 만들어집니다. (크롬 권장)</p>
+  <div class="mt-modes">
+    <button type="button" class="mt-mode" data-mode="offline">
+      <b>오프라인 회의</b>
+      <span>노트북 마이크로 녹음합니다. 노트북을 테이블 가운데에 두세요.</span>
+    </button>
+    <button type="button" class="mt-mode" data-mode="online">
+      <b>온라인 회의</b>
+      <span>회의 소리 + 내 마이크를 함께 녹음합니다.<br>
+      · 구글밋·줌 웹: 공유 창에서 그 <b>탭</b> 선택 + "탭 오디오 공유" 체크<br>
+      · 줌·팀즈 앱: <b>전체 화면</b> 선택 + "시스템 오디오도 공유" 체크</span>
+    </button>
+  </div>
+</div>
+<div class="card" id="mt-rec" hidden>
+  <div class="row" style="justify-content:space-between">
+    <span style="display:inline-flex;align-items:center;gap:12px">
+      <span class="mt-dot"></span><b id="mt-time" style="font-variant-numeric:tabular-nums">00:00</b>
+      <span id="mt-level-wrap"><span id="mt-level"></span></span>
+    </span>
+    <span style="display:inline-flex;gap:8px">
+      <button type="button" id="mt-pause" class="chip chip-save">일시정지</button>
+      <button type="button" id="mt-stop">종료하고 회의록 만들기</button>
+    </span>
+  </div>
+  <div id="mt-progress" class="meta" style="margin:8px 0 0"></div>
+</div>
+<div id="mt-status"></div>
+<div id="mt-result"></div>
+<div class="card"><h3 class="eng-h">지난 회의록</h3><div id="mt-list" class="meta">불러오는 중…</div></div>
+<style>
+  .mt-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+  .mt-mode { text-align: left; background: var(--card); border: 2px solid var(--line);
+             border-radius: var(--r-lg); padding: 18px; cursor: pointer; color: var(--text);
+             font-weight: 400; box-shadow: var(--shadow); }
+  .mt-mode:hover { border-color: var(--accent); background: #f7faff; }
+  .mt-mode > b { display: block; font-size: 1.02rem; margin-bottom: 6px; }
+  .mt-mode span { color: var(--muted); font-size: 0.84rem; line-height: 1.6; }
+  .mt-mode span b { color: var(--sub); }
+  .mt-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red);
+            animation: mtblink 1.2s infinite; }
+  #mt-rec.paused .mt-dot { animation: none; background: var(--muted); }
+  @keyframes mtblink { 50% { opacity: 0.3; } }
+  #mt-level-wrap { display: inline-block; width: 90px; height: 8px; background: var(--fill);
+                   border-radius: 4px; overflow: hidden; }
+  #mt-level { display: block; height: 8px; width: 0; background: var(--green);
+              transition: width 0.1s linear; }
+  .mt-sec h4 { margin: 14px 0 6px; font-size: 0.92rem; }
+  .mt-sec li { margin-bottom: 4px; font-size: 0.9rem; }
+  .mt-row { display: flex; align-items: center; gap: 8px; padding: 8px 2px;
+            border-bottom: 1px solid #f4f5f7; font-size: 0.9rem; }
+  .mt-row:last-child { border-bottom: none; }
+  .mt-row .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+               white-space: nowrap; cursor: pointer; color: var(--text); font-weight: 600; }
+  .mt-row .t:hover { color: var(--accent); }
+  .mt-badge { background: var(--fill); color: var(--sub); border-radius: 6px;
+              padding: 2px 8px; font-size: 0.72rem; font-weight: 700; flex-shrink: 0; }
+  @media (max-width: 720px) { .mt-modes { grid-template-columns: 1fr; } }
+</style>
+<script>
+(function () {
+  var CHUNK_SECONDS = 600;  // 10분 단위 전사
+  var meetingId = null;
+  var recording = false, paused = false;
+  var recorder = null, mixedStream = null, rawStreams = [];
+  var audioCtx = null, analyser = null;
+  var elapsed = 0, partSeconds = 0, tickTimer = null;
+  var uploadChain = Promise.resolve();
+  var partsTotal = 0, partsDone = 0, partsFail = 0;
+  var audioParts = [];
+
+  function $(id) { return document.getElementById(id); }
+  function setStatus(msg, isError) {
+    $("mt-status").innerHTML = msg
+      ? '<p class="' + (isError ? "error" : "meta") + '">' + msg + "</p>" : "";
+  }
+  function fmt(s) {
+    var m = Math.floor(s / 60), sec = s % 60;
+    var h = Math.floor(m / 60); m = m % 60;
+    function p(n) { return (n < 10 ? "0" : "") + n; }
+    return (h ? h + ":" : "") + p(m) + ":" + p(sec);
+  }
+  function progress() {
+    var parts = [];
+    if (partsTotal) parts.push(partsDone + "/" + partsTotal + " 조각 전사 완료");
+    if (partsFail) parts.push(partsFail + "개 실패");
+    $("mt-progress").textContent = parts.join(" · ");
+  }
+
+  function startMeeting(mode) {
+    setStatus("");
+    $("mt-result").innerHTML = "";
+    var mic;
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (m) {
+      mic = m;
+      if (mode === "offline") return null;
+      return navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    }).then(function (disp) {
+      if (mode === "online") {
+        if (!disp.getAudioTracks().length) {
+          disp.getTracks().forEach(function (t) { t.stop(); });
+          mic.getTracks().forEach(function (t) { t.stop(); });
+          throw new Error("소리 공유가 꺼져 있습니다. 공유 창에서 '탭 오디오 공유' 또는 '시스템 오디오도 공유'를 체크해주세요.");
+        }
+        rawStreams = [mic, disp];
+      } else {
+        rawStreams = [mic];
+      }
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      var dest = audioCtx.createMediaStreamDestination();
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      rawStreams.forEach(function (s) {
+        if (!s.getAudioTracks().length) return;
+        var src = audioCtx.createMediaStreamSource(new MediaStream(s.getAudioTracks()));
+        src.connect(dest);
+        src.connect(analyser);
+      });
+      mixedStream = dest.stream;
+      return fetch("/api/meetings/start", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: mode }),
+      }).then(function (r) { return r.json(); });
+    }).then(function (d) {
+      if (!d) return;
+      if (!d.ok) throw new Error(d.error || "시작 실패");
+      meetingId = d.meeting.id;
+      recording = true;
+      paused = false;
+      elapsed = 0;
+      partSeconds = 0;
+      partsTotal = partsDone = partsFail = 0;
+      audioParts = [];
+      uploadChain = Promise.resolve();
+      $("mt-setup").hidden = true;
+      $("mt-rec").hidden = false;
+      $("mt-rec").classList.remove("paused");
+      startRecorder();
+      tickTimer = setInterval(tick, 1000);
+      levelLoop();
+      progress();
+    }).catch(function (err) {
+      setStatus(String(err.message || err), true);
+      cleanupStreams();
+    });
+  }
+
+  function startRecorder() {
+    recorder = new MediaRecorder(mixedStream,
+      { mimeType: "audio/webm;codecs=opus", audioBitsPerSecond: 32000 });
+    var blobs = [];
+    recorder.ondataavailable = function (e) { if (e.data && e.data.size) blobs.push(e.data); };
+    recorder.onstop = function () {
+      var blob = new Blob(blobs, { type: "audio/webm" });
+      if (blob.size > 4000) {
+        audioParts.push(blob);
+        queueUpload(blob);
+      }
+      if (recording) startRecorder();  // 다음 10분 조각
+    };
+    recorder.start();
+  }
+
+  function queueUpload(blob) {
+    partsTotal++;
+    progress();
+    uploadChain = uploadChain.then(function () {
+      return fetch("/api/meetings/" + meetingId + "/chunk", {
+        method: "POST", headers: { "Content-Type": "audio/webm" }, body: blob,
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        if (d.ok) partsDone++; else partsFail++;
+        progress();
+      }).catch(function () { partsFail++; progress(); });
+    });
+  }
+
+  function tick() {
+    if (paused) return;
+    elapsed++;
+    partSeconds++;
+    $("mt-time").textContent = fmt(elapsed);
+    if (partSeconds >= CHUNK_SECONDS && recorder && recorder.state === "recording") {
+      partSeconds = 0;
+      recorder.stop();  // onstop에서 업로드 + 다음 조각 시작
+    }
+  }
+
+  function levelLoop() {
+    if (!recording || !analyser) return;
+    var buf = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(buf);
+    var sum = 0;
+    for (var i = 0; i < buf.length; i++) sum += buf[i];
+    $("mt-level").style.width = Math.min(100, (sum / buf.length) * 1.6) + "%";
+    requestAnimationFrame(levelLoop);
+  }
+
+  function cleanupStreams() {
+    rawStreams.forEach(function (s) { s.getTracks().forEach(function (t) { t.stop(); }); });
+    rawStreams = [];
+    if (audioCtx) { audioCtx.close().catch(function () {}); audioCtx = null; }
+  }
+
+  $("mt-pause") && $("mt-pause").addEventListener("click", function () {
+    if (!recorder) return;
+    if (paused) {
+      recorder.resume();
+      paused = false;
+      $("mt-pause").textContent = "일시정지";
+      $("mt-rec").classList.remove("paused");
+    } else {
+      recorder.pause();
+      paused = true;
+      $("mt-pause").textContent = "다시 시작";
+      $("mt-rec").classList.add("paused");
+    }
+  });
+
+  $("mt-stop").addEventListener("click", function () {
+    if (!recording) return;
+    recording = false;
+    clearInterval(tickTimer);
+    $("mt-stop").disabled = true;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+    cleanupStreams();
+    setStatus("남은 조각을 전사하고 회의록을 만드는 중… (조각당 30초~1분)");
+    // 마지막 onstop 업로드가 체인에 붙을 시간을 준 뒤 대기
+    setTimeout(function () {
+      uploadChain.then(function () {
+        return fetch("/api/meetings/" + meetingId + "/finish", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ duration_sec: elapsed }),
+        }).then(function (r) { return r.json(); });
+      }).then(function (d) {
+        $("mt-stop").disabled = false;
+        $("mt-rec").hidden = true;
+        $("mt-setup").hidden = false;
+        if (!d.ok) { setStatus("회의록 생성 실패: " + (d.error || "") + " — 목록에서 다시 시도할 수 있습니다.", true); loadList(); return; }
+        setStatus("");
+        renderMinutes(d.minutes, d.transcript, elapsed, audioParts);
+        loadList();
+      });
+    }, 800);
+  });
+
+  window.addEventListener("beforeunload", function (e) {
+    if (recording) { e.preventDefault(); e.returnValue = ""; }
+  });
+
+  document.querySelectorAll(".mt-mode").forEach(function (b) {
+    b.addEventListener("click", function () { startMeeting(b.dataset.mode); });
+  });
+
+  // ---------- 회의록 렌더/다운로드
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function minutesMd(m, transcript, dur) {
+    var L = [];
+    L.push("# " + (m.title || "회의록"));
+    if (dur) L.push("녹음 시간: " + fmt(dur));
+    if (m.attendees && m.attendees.length) L.push("참석: " + m.attendees.join(", "));
+    function sec(title, items) {
+      if (!items || !items.length) return;
+      L.push("", "## " + title);
+      items.forEach(function (s) { L.push("- " + s); });
+    }
+    sec("주요 논의", m.summary);
+    sec("결정 사항", m.decisions);
+    if (m.action_items && m.action_items.length) {
+      L.push("", "## 액션 아이템");
+      m.action_items.forEach(function (a) {
+        L.push("- [ ] " + a.task + (a.owner ? " (담당: " + a.owner + ")" : "")
+          + (a.due ? " (기한: " + a.due + ")" : ""));
+      });
+    }
+    if (transcript) L.push("", "## 전체 스크립트", "", transcript);
+    return L.join("\\n");
+  }
+  function renderMinutes(m, transcript, dur, parts) {
+    var box = $("mt-result");
+    box.innerHTML = "";
+    var card = el("div", "card");
+    card.appendChild(el("h3", "eng-h", m.title || "회의록"));
+    if (m.attendees && m.attendees.length) {
+      card.appendChild(el("div", "meta", "참석: " + m.attendees.join(", ")
+        + (dur ? " · 녹음 " + fmt(dur) : "")));
+    }
+    function listSec(title, items, checkbox) {
+      if (!items || !items.length) return;
+      var sec = el("div", "mt-sec");
+      sec.appendChild(el("h4", "", title));
+      var ul = el("ul", "");
+      ul.style.margin = "0";
+      ul.style.paddingLeft = "20px";
+      items.forEach(function (s) { ul.appendChild(el("li", "", s)); });
+      sec.appendChild(ul);
+      card.appendChild(sec);
+    }
+    listSec("주요 논의", m.summary);
+    listSec("결정 사항", m.decisions);
+    if (m.action_items && m.action_items.length) {
+      listSec("액션 아이템", m.action_items.map(function (a) {
+        return a.task + (a.owner ? " — " + a.owner : "") + (a.due ? " (" + a.due + ")" : "");
+      }));
+    }
+    if (transcript) {
+      var det = document.createElement("details");
+      det.style.marginTop = "12px";
+      var sm = document.createElement("summary");
+      sm.textContent = "전체 스크립트 보기";
+      sm.style.cursor = "pointer";
+      sm.className = "meta";
+      det.appendChild(sm);
+      var pre = el("div", "", transcript);
+      pre.style.whiteSpace = "pre-wrap";
+      pre.style.fontSize = "0.85rem";
+      pre.style.marginTop = "8px";
+      det.appendChild(pre);
+      card.appendChild(det);
+    }
+    var btns = el("div", "row");
+    btns.style.marginTop = "14px";
+    var dl = el("button", "chip chip-save", "회의록 .md 내려받기");
+    dl.type = "button";
+    dl.addEventListener("click", function () {
+      var blob = new Blob([minutesMd(m, transcript, dur)], { type: "text/markdown" });
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = (m.title || "회의록") + ".md";
+      a.click();
+    });
+    btns.appendChild(dl);
+    (parts || []).forEach(function (blob, i) {
+      var ab = el("button", "chip chip-save",
+        "녹음 파일 " + (parts.length > 1 ? (i + 1) + " " : "") + "내려받기");
+      ab.type = "button";
+      ab.addEventListener("click", function () {
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = (m.title || "회의") + (parts.length > 1 ? "_" + (i + 1) : "") + ".webm";
+        a.click();
+      });
+      btns.appendChild(ab);
+    });
+    card.appendChild(btns);
+    box.appendChild(card);
+    card.scrollIntoView({ behavior: "smooth" });
+  }
+
+  // ---------- 지난 회의록
+  function loadList() {
+    fetch("/api/meetings").then(function (r) { return r.json(); }).then(function (d) {
+      var list = $("mt-list");
+      list.innerHTML = "";
+      if (!d.ok) { list.textContent = d.error || "오류"; return; }
+      if (!d.items.length) { list.textContent = "아직 회의록이 없습니다."; return; }
+      d.items.forEach(function (mt) {
+        var row = el("div", "mt-row");
+        row.appendChild(el("span", "mt-badge", mt.mode === "online" ? "온라인" : "오프라인"));
+        var t = el("span", "t", (mt.title || "(제목 없음)") + " · " + String(mt.created_at).slice(0, 10)
+          + (mt.duration_sec ? " · " + fmt(mt.duration_sec) : ""));
+        t.addEventListener("click", function () {
+          fetch("/api/meetings/" + mt.id).then(function (r) { return r.json(); })
+            .then(function (d2) {
+              if (!d2.ok) return;
+              renderMinutes(d2.meeting.minutes || {}, d2.meeting.transcript,
+                            d2.meeting.duration_sec, []);
+            });
+        });
+        row.appendChild(t);
+        var del = el("button", "link-btn", "삭제");
+        del.type = "button";
+        del.addEventListener("click", function () {
+          if (!confirm("이 회의록을 삭제할까요?")) return;
+          fetch("/api/meetings/" + mt.id + "/delete", { method: "POST" }).then(loadList);
+        });
+        row.appendChild(del);
+        $("mt-list").appendChild(row);
+      });
+    }).catch(function () {});
+  }
+  loadList();
+})();
+</script>"""
+
+
+@app.get("/meeting", response_class=HTMLResponse)
+def meeting_page(request: Request):
+    redirect = gate(request)
+    if redirect:
+        return redirect
+    user = user_of(request)
+    if not auth.is_admin(user):
+        return RedirectResponse("/bid", status_code=302)
+    return layout("회의록", icon("audio-lines", 20) + " 회의록", "/meeting",
+                  MEETING_PAGE, user=user, admin=True)
+
+
+@app.post("/api/meetings/start")
+def meeting_start_api(request: Request, body: dict = Body(...)):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        row = meetings.create_meeting(user, str(body.get("mode") or "offline"))
+        return {"ok": True, "meeting": row}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/meetings/{meeting_id}/chunk")
+async def meeting_chunk_api(request: Request, meeting_id: int):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    data = await request.body()
+    if not data or len(data) < 2000:  # 무음에 가까운 빈 조각은 건너뜀
+        return {"ok": True, "skipped": True}
+    mime = request.headers.get("content-type") or "audio/webm"
+    try:
+        text = summarize.gemini_transcribe_audio(data, mime)
+        meetings.append_transcript(user, meeting_id, text)
+        return {"ok": True, "chars": len(text)}
+    except (store.StoreError, summarize.SummarizeError) as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/meetings/{meeting_id}/finish")
+def meeting_finish_api(request: Request, meeting_id: int, body: dict = Body(...)):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        m = meetings.get_meeting(user, meeting_id)
+        transcript = (m.get("transcript") or "").strip()
+        if len(transcript) < 30:
+            return {"ok": False,
+                    "error": "전사된 내용이 거의 없습니다. 마이크/소리 공유 상태를 확인해주세요."}
+        minutes = summarize.gemini_minutes(transcript)
+        meetings.finish_meeting(user, meeting_id, minutes.get("title") or "회의록",
+                                minutes, int(body.get("duration_sec") or 0))
+        return {"ok": True, "minutes": minutes, "transcript": transcript}
+    except (store.StoreError, summarize.SummarizeError) as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/meetings")
+def meetings_list_api(request: Request):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        return {"ok": True, "items": meetings.list_meetings(user)}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/meetings/{meeting_id}")
+def meeting_detail_api(request: Request, meeting_id: int):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        return {"ok": True, "meeting": meetings.get_meeting(user, meeting_id)}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/meetings/{meeting_id}/delete")
+def meeting_delete_api(request: Request, meeting_id: int):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        meetings.delete_meeting(user, meeting_id)
+        return {"ok": True}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
 
 
 @app.get("/login", response_class=HTMLResponse)
