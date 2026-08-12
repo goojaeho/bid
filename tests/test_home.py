@@ -9,7 +9,7 @@ os.environ["G2B_SERVICE_KEY"] = "dummy"
 from fastapi.testclient import TestClient
 
 import api.index as web
-from app import auth, english, genie, meetings, searches, summarize, todos
+from app import auth, english, genie, gmail, meetings, searches, summarize, todos
 from app.store import StoreError
 
 KST = ZoneInfo("Asia/Seoul")
@@ -114,10 +114,11 @@ class RoutingTest(unittest.TestCase):
             self.assertIn(marker, r.text, marker)
 
     def test_admin_dashboard_renders(self):
+        today_done = datetime.now(KST).replace(hour=10).isoformat()
         with patch.object(todos, "enabled", return_value=True), \
              patch.object(todos, "list_todos", return_value=self.sample), \
              patch.object(todos, "stats_rows", return_value=[
-                 {"done_at": "2026-07-29T10:00:00+09:00", "area": "work"}]):
+                 {"done_at": today_done, "area": "work"}]):
             r = self.client.get("/", cookies=self.admin_cookie)
         self.assertEqual(r.status_code, 200)
         for needle in ["오늘 완료", "최근 14일", "오늘 할 일", "할 일 관리 →",
@@ -469,6 +470,98 @@ class MeetingTest(unittest.TestCase):
             r = self.client.post("/api/meetings/5/finish", cookies=self.admin_cookie,
                                  json={"duration_sec": 60})
         self.assertFalse(r.json()["ok"])
+
+
+class MailTest(unittest.TestCase):
+    """메일 탭 — Gmail 파싱·동기화·API 가드."""
+
+    def setUp(self):
+        os.environ["GOOGLE_CLIENT_ID"] = "cid"
+        os.environ["GOOGLE_CLIENT_SECRET"] = "sec"
+        os.environ["ADMIN_EMAILS"] = "boss@company.com"
+        self.client = TestClient(web.app)
+        self.admin_cookie = {auth.COOKIE_NAME: auth.make_session("boss@company.com")}
+        self.user_cookie = {auth.COOKIE_NAME: auth.make_session("guest@gmail.com")}
+
+    def tearDown(self):
+        for k in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "ADMIN_EMAILS",
+                  "MAIL_PUSH_SECRET", "GOOGLE_MAIL_CLIENT_ID",
+                  "GOOGLE_MAIL_CLIENT_SECRET"):
+            os.environ.pop(k, None)
+
+    def test_extract_body_prefers_plain(self):
+        import base64
+        def b64(s):
+            return base64.urlsafe_b64encode(s.encode()).decode()
+        payload = {"mimeType": "multipart/alternative", "parts": [
+            {"mimeType": "text/html",
+             "body": {"data": b64("<p>HTML <b>내용</b></p>")}},
+            {"mimeType": "text/plain", "body": {"data": b64("일반 텍스트 내용")}},
+        ]}
+        self.assertEqual(gmail.extract_body(payload), "일반 텍스트 내용")
+        payload_html = {"mimeType": "text/html",
+                        "body": {"data": b64("<p>HTML만 <b>있음</b></p>")}}
+        self.assertEqual(gmail.extract_body(payload_html), "HTML만 있음")
+
+    def test_non_admin_blocked(self):
+        r = self.client.get("/mail", cookies=self.user_cookie,
+                            follow_redirects=False)
+        self.assertEqual((r.status_code, r.headers["location"]), (302, "/bid"))
+        r = self.client.get("/api/mail", cookies=self.user_cookie)
+        self.assertFalse(r.json()["ok"])
+
+    def test_page_shows_connect_card_when_not_linked(self):
+        os.environ["GOOGLE_MAIL_CLIENT_ID"] = "mid"
+        os.environ["GOOGLE_MAIL_CLIENT_SECRET"] = "msec"
+        with patch.object(gmail, "first_account", return_value=None):
+            r = self.client.get("/mail", cookies=self.admin_cookie)
+        self.assertIn("회사 구글 계정 연동하기", r.text)
+
+    def test_page_renders_list_when_linked(self):
+        os.environ["GOOGLE_MAIL_CLIENT_ID"] = "mid"
+        os.environ["GOOGLE_MAIL_CLIENT_SECRET"] = "msec"
+        with patch.object(gmail, "first_account", return_value="me@melaka.co.kr"):
+            r = self.client.get("/mail", cookies=self.admin_cookie)
+        for marker in ("mail-cats", "mail-refresh", "답장 필요",
+                       "me@melaka.co.kr", "연동 해제"):
+            self.assertIn(marker, r.text, marker)
+
+    def test_push_endpoint_requires_secret(self):
+        os.environ["MAIL_PUSH_SECRET"] = "s3cret"
+        r = self.client.post("/api/mail/push?key=wrong", json={})
+        self.assertFalse(r.json()["ok"])
+
+    def test_push_endpoint_triggers_sync(self):
+        import base64
+        os.environ["MAIL_PUSH_SECRET"] = "s3cret"
+        payload = base64.urlsafe_b64encode(
+            b'{"emailAddress": "Me@melaka.co.kr", "historyId": 123}').decode()
+        called = {}
+        with patch.object(gmail, "connected", return_value=True), \
+             patch.object(gmail, "sync",
+                          side_effect=lambda e: called.update(email=e) or {}):
+            r = self.client.post("/api/mail/push?key=s3cret",
+                                 json={"message": {"data": payload}})
+        self.assertTrue(r.json()["ok"])
+        self.assertEqual(called["email"], "me@melaka.co.kr")
+
+    def test_refresh_api_wiring(self):
+        with patch.object(gmail, "first_account", return_value="me@melaka.co.kr"), \
+             patch.object(gmail, "sync", return_value={"new": 2, "important": 1}):
+            r = self.client.post("/api/mail/refresh", cookies=self.admin_cookie)
+        self.assertEqual(r.json(), {"ok": True, "new": 2, "important": 1})
+
+    def test_task_api_adds_todo(self):
+        captured = {}
+        def fake_add(email, title, area="work", category="", **kw):
+            captured.update(email=email, title=title, area=area, category=category)
+            return {"id": 1}
+        with patch.object(todos, "add_todo", side_effect=fake_add):
+            r = self.client.post("/api/mail/3/task", cookies=self.admin_cookie,
+                                 json={"text": "제안서 회신하기"})
+        self.assertTrue(r.json()["ok"])
+        self.assertEqual(captured["title"], "제안서 회신하기")
+        self.assertEqual(captured["category"], "메일")
 
 
 if __name__ == "__main__":

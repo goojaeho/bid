@@ -341,6 +341,50 @@ def gemini_polish_script(text: str) -> dict:
     return {"title": str(out.get("title", "")).strip()[:100], "sentences": sentences}
 
 
+MAIL_PROMPT = """다음은 회사 메일함에 새로 도착한 메일들입니다. 각 메일을 분석해 아래 JSON 배열 형식으로만 반환하세요.
+설명은 모두 한국어로 작성합니다.
+
+[{"id": "메일 id 그대로",
+  "category": "reply_needed|schedule|fyi|promo",
+  "summary": "핵심 내용 한 줄 요약 (한국어)",
+  "schedule": {"title": "일정 제목", "date": "YYYY-MM-DD", "time": "HH:MM 또는 빈 문자열",
+               "duration_min": 60, "location": "장소(있으면)"} 또는 null,
+  "tasks": ["메일에서 요청받은 할 일 (없으면 빈 배열)"]}]
+
+분류 기준:
+- reply_needed: 내가 답장하거나 회신 행동이 필요한 메일
+- schedule: 미팅 제안·일정·마감일이 들어 있는 메일 (schedule 필드 채우기, 오늘은 {today})
+- fyi: 참고용 공지·알림
+- promo: 광고·뉴스레터·홍보성
+
+메일 목록:
+"""
+
+
+def gemini_mail_analyze(items: list[dict]) -> list[dict]:
+    """새 메일 일괄 분석 → [{id, category, summary, schedule, tasks}]."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    if not items:
+        return []
+    today = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+    blocks = []
+    for m in items[:20]:
+        blocks.append(f"[id: {m.get('id')}]\n보낸사람: {m.get('sender')}\n"
+                      f"제목: {m.get('subject')}\n본문:\n{str(m.get('body'))[:3000]}")
+    data = _gemini_call({
+        "contents": [{"parts": [{
+            "text": MAIL_PROMPT.replace("{today}", today) + "\n\n---\n\n".join(blocks)}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }, kind="mail", timeout=90)
+    try:
+        out = json.loads(_first_text(data))
+    except json.JSONDecodeError:
+        raise SummarizeError("메일 분석 실패 — 다시 시도해주세요.")
+    return out if isinstance(out, list) else []
+
+
 TRANSCRIBE_PROMPT = (
     "다음 오디오는 회의 녹음의 일부입니다. 들리는 내용을 한국어로 정확히 전사하세요. "
     "화자가 바뀌는 것 같으면 새 줄에 '- '로 시작해 구분하고, 영어 등 외국어 발화는 "

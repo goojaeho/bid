@@ -25,8 +25,8 @@ from fastapi.responses import RedirectResponse
 
 from fastapi import Body
 
-from app import (auth, english, genie, gov_sources, kakao, meetings, migrations,
-                 searches, store, summarize, todos)
+from app import (auth, english, genie, gmail, gov_sources, kakao, meetings,
+                 migrations, searches, store, summarize, todos)
 from app.g2b_client import CATEGORIES, G2BApiError, G2BClient
 from app.webui import icon, layout
 
@@ -972,7 +972,27 @@ def _home_content(data: dict, st: dict) -> str:
   </div>
   <ul class="todo-list" style="margin-top:6px">{rows}</ul>
 </div>"""
-    return f'<div class="stat-row">{tiles}</div>{today_card}{chart}{TODO_JS}'
+
+    mail_card = ""
+    try:
+        acct = gmail.first_account()
+        if acct:
+            mc = gmail.counts(acct)
+            if mc["reply"] or mc["schedule"]:
+                parts = []
+                if mc["reply"]:
+                    parts.append(f'답장 필요 <b style="color:var(--red)">{mc["reply"]}건</b>')
+                if mc["schedule"]:
+                    parts.append(f'일정 감지 <b style="color:var(--accent)">{mc["schedule"]}건</b>')
+                mail_card = (
+                    '<div class="card"><div class="row" style="justify-content:space-between">'
+                    f'<span style="font-size:0.92rem">{icon("mail", 15)} 메일 · {" · ".join(parts)}</span>'
+                    '<a href="/mail" style="font-size:0.84rem;font-weight:700">메일 보기 →</a>'
+                    "</div></div>"
+                )
+    except Exception:
+        pass
+    return f'<div class="stat-row">{tiles}</div>{mail_card}{today_card}{chart}{TODO_JS}'
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -3398,6 +3418,336 @@ def meeting_delete_api(request: Request, meeting_id: int):
         return {"ok": False, "error": "권한이 없습니다."}
     try:
         meetings.delete_meeting(user, meeting_id)
+        return {"ok": True}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ------------------------------------------------- 메일 (Gmail 분석)
+
+MAIL_CONNECT_CARD = """<div class="card" style="text-align:center;padding:44px 20px">
+  <p style="margin:0 0 8px;font-weight:800;font-size:1.05rem">회사 Gmail 연동이 필요합니다</p>
+  <p class="meta" style="margin:0 0 20px">회사 구글 계정을 한 번 연동하면 새 메일을 AI가 분석해<br>
+  답장 필요·일정·할일을 자동으로 정리해드립니다. (메일은 읽기 전용으로만 접근)</p>
+  <a href="/gmail/connect"><button type="button">회사 구글 계정 연동하기</button></a>
+</div>"""
+
+MAIL_ENV_CARD = """<div class="card"><p class="error" style="margin:0">
+메일 연동용 환경변수(GOOGLE_MAIL_CLIENT_ID / GOOGLE_MAIL_CLIENT_SECRET)가 아직 설정되지 않았습니다.
+설정 방법은 안내를 참고하세요.</p></div>"""
+
+MAIL_PAGE = """<div class="row" style="margin-bottom:12px">
+  <span class="seg" id="mail-cats">
+    <a href="#" data-cat="" class="on">전체</a>
+    <a href="#" data-cat="reply_needed">답장 필요</a>
+    <a href="#" data-cat="schedule">일정</a>
+    <a href="#" data-cat="fyi">참고</a>
+  </span>
+  <button type="button" id="mail-refresh" class="chip chip-save">새 메일 확인</button>
+  <span id="mail-info" class="meta" style="margin:0">__ACCOUNT__</span>
+  <a href="/gmail/disconnect" class="meta" style="margin-left:auto"
+     onclick="return confirm('Gmail 연동을 해제할까요?')">연동 해제</a>
+</div>
+<div id="mail-status"></div>
+<div class="card"><div id="mail-list" class="meta">불러오는 중…</div></div>
+<style>
+  .ml-row { padding: 12px 4px; border-bottom: 1px solid #f4f5f7; cursor: pointer; }
+  .ml-row:last-child { border-bottom: none; }
+  .ml-row:hover { background: #f7f9fb; }
+  .ml-head { display: flex; align-items: center; gap: 8px; }
+  .ml-cat { border-radius: 6px; padding: 2px 8px; font-size: 0.72rem; font-weight: 700; flex-shrink: 0; }
+  .ml-cat.reply_needed { background: var(--red-soft); color: var(--red); }
+  .ml-cat.schedule { background: var(--accent-soft); color: var(--accent); }
+  .ml-cat.fyi { background: var(--fill); color: var(--sub); }
+  .ml-cat.promo { background: var(--fill); color: var(--muted); }
+  .ml-sender { font-weight: 700; font-size: 0.88rem; color: var(--text);
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
+  .ml-subject { flex: 1; min-width: 0; font-size: 0.9rem; color: var(--text);
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ml-date { color: var(--muted); font-size: 0.78rem; white-space: nowrap; }
+  .ml-sum { color: var(--sub); font-size: 0.84rem; margin: 5px 0 0 0; }
+  .ml-detail { background: #f7f9fb; border-radius: 10px; padding: 12px 14px; margin-top: 10px;
+               font-size: 0.86rem; cursor: default; }
+  .ml-detail .row { margin-top: 8px; }
+  .ml-done { opacity: 0.55; }
+</style>
+<script>
+(function () {
+  var listEl = document.getElementById("mail-list");
+  var cat = "";
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function post(url, body) {
+    return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(body || {}) }).then(function (r) { return r.json(); });
+  }
+  function setStatus(msg, isError) {
+    document.getElementById("mail-status").innerHTML = msg
+      ? '<p class="' + (isError ? "error" : "meta") + '">' + msg + "</p>" : "";
+  }
+  var CATS = { reply_needed: "답장 필요", schedule: "일정", fyi: "참고", promo: "광고성" };
+
+  function load() {
+    fetch("/api/mail" + (cat ? "?cat=" + cat : "")).then(function (r) { return r.json(); })
+      .then(function (d) {
+        listEl.innerHTML = "";
+        if (!d.ok) { listEl.textContent = d.error || "오류"; return; }
+        if (!d.items.length) {
+          listEl.textContent = "표시할 메일이 없습니다. [새 메일 확인]을 눌러보세요.";
+          return;
+        }
+        d.items.forEach(function (m) { listEl.appendChild(row(m)); });
+      }).catch(function () {});
+  }
+
+  function row(m) {
+    var r = el("div", "ml-row" + (m.status === "done" ? " ml-done" : ""));
+    var head = el("div", "ml-head");
+    head.appendChild(el("span", "ml-cat " + m.category, CATS[m.category] || m.category));
+    head.appendChild(el("span", "ml-sender", (m.sender || "").split("<")[0].trim() || m.sender));
+    head.appendChild(el("span", "ml-subject", m.subject || "(제목 없음)"));
+    head.appendChild(el("span", "ml-date", (m.received_at || "").slice(5, 16).replace("T", " ")));
+    r.appendChild(head);
+    if (m.summary) r.appendChild(el("p", "ml-sum", m.summary));
+    var detail = null;
+    r.addEventListener("click", function () {
+      if (detail) { detail.remove(); detail = null; return; }
+      detail = buildDetail(m);
+      r.appendChild(detail);
+    });
+    return r;
+  }
+
+  function buildDetail(m) {
+    var d = el("div", "ml-detail");
+    d.addEventListener("click", function (e) { e.stopPropagation(); });
+    if (m.schedule && m.schedule.date) {
+      var s = m.schedule;
+      d.appendChild(el("div", "", "일정: " + (s.title || "") + " — " + s.date
+        + (s.time ? " " + s.time : "") + (s.location ? " @ " + s.location : "")));
+    }
+    (m.tasks || []).forEach(function (t) { d.appendChild(el("div", "meta", "할 일: " + t)); });
+    var btns = el("div", "row");
+    var open = el("a", "chip chip-save", "Gmail에서 열기");
+    open.href = "https://mail.google.com/mail/u/0/#all/" + (m.thread_id || m.gmail_id);
+    open.target = "_blank";
+    btns.appendChild(open);
+    if (m.schedule && m.schedule.date) {
+      var cal = el("button", "chip chip-save", "캘린더 등록");
+      cal.type = "button";
+      cal.addEventListener("click", function () {
+        cal.disabled = true;
+        post("/api/mail/" + m.id + "/calendar").then(function (r) {
+          cal.disabled = false;
+          if (!r.ok) { alert(r.error || "등록 실패"); return; }
+          cal.textContent = "등록됨 ✓";
+          if (r.link) window.open(r.link, "_blank");
+        });
+      });
+      btns.appendChild(cal);
+    }
+    (m.tasks || []).forEach(function (t) {
+      var b = el("button", "chip chip-save", "할일로 추가: " + t.slice(0, 20) + (t.length > 20 ? "…" : ""));
+      b.type = "button";
+      b.addEventListener("click", function () {
+        b.disabled = true;
+        post("/api/mail/" + m.id + "/task", { text: t }).then(function (r) {
+          b.disabled = false;
+          if (!r.ok) { alert(r.error || "추가 실패"); return; }
+          b.textContent = "추가됨 ✓";
+        });
+      });
+      btns.appendChild(b);
+    });
+    var done = el("button", "chip chip-save", "처리함");
+    done.type = "button";
+    done.addEventListener("click", function () {
+      post("/api/mail/" + m.id + "/dismiss").then(load);
+    });
+    btns.appendChild(done);
+    d.appendChild(btns);
+    return d;
+  }
+
+  document.getElementById("mail-cats").addEventListener("click", function (e) {
+    var a = e.target.closest("a[data-cat]");
+    if (!a) return;
+    e.preventDefault();
+    cat = a.dataset.cat;
+    this.querySelectorAll("a").forEach(function (x) { x.classList.toggle("on", x === a); });
+    load();
+  });
+
+  document.getElementById("mail-refresh").addEventListener("click", function () {
+    var btn = this;
+    btn.disabled = true;
+    setStatus("새 메일 확인·분석 중…");
+    post("/api/mail/refresh").then(function (d) {
+      btn.disabled = false;
+      if (!d.ok) { setStatus(d.error || "동기화 실패", true); return; }
+      setStatus(d.new ? "새 메일 " + d.new + "건 분석 완료" : "새 메일이 없습니다.");
+      load();
+    }).catch(function () { btn.disabled = false; setStatus("네트워크 오류", true); });
+  });
+
+  load();
+})();
+</script>"""
+
+
+@app.get("/mail", response_class=HTMLResponse)
+def mail_page(request: Request):
+    redirect = gate(request)
+    if redirect:
+        return redirect
+    user = user_of(request)
+    if not auth.is_admin(user):
+        return RedirectResponse("/bid", status_code=302)
+    if not gmail.enabled():
+        content = MAIL_ENV_CARD
+    else:
+        acct = gmail.first_account()
+        content = (MAIL_PAGE.replace("__ACCOUNT__", esc(acct))
+                   if acct else MAIL_CONNECT_CARD)
+    return layout("메일", icon("mail", 20) + " 메일", "/mail",
+                  content, user=user, admin=True)
+
+
+@app.get("/gmail/connect")
+def gmail_connect(request: Request):
+    if not _admin_user(request):
+        return RedirectResponse("/login", status_code=302)
+    if not gmail.enabled():
+        return RedirectResponse("/mail", status_code=302)
+    return RedirectResponse(gmail.connect_url(), status_code=302)
+
+
+@app.get("/gmail/callback")
+def gmail_callback(request: Request, code: str = Query("")):
+    if not _admin_user(request):
+        return RedirectResponse("/login", status_code=302)
+    if not code:
+        return RedirectResponse("/mail", status_code=302)
+    try:
+        email = gmail.handle_callback(code)
+        try:
+            gmail.start_watch(email)
+        except gmail.GmailError:
+            pass  # 푸시 토픽 미설정이어도 연동은 유지 (수동 새로고침)
+        gmail.sync(email)
+    except (gmail.GmailError, store.StoreError, summarize.SummarizeError) as e:
+        return HTMLResponse(layout("메일", "메일", "/mail",
+                                   f'<div class="card"><p class="error">연동 실패: {esc(str(e))}</p></div>',
+                                   user=user_of(request), admin=True))
+    return RedirectResponse("/mail", status_code=302)
+
+
+@app.get("/gmail/disconnect")
+def gmail_disconnect(request: Request):
+    user = _admin_user(request)
+    if user:
+        try:
+            acct = gmail.first_account()
+            if acct:
+                gmail.disconnect(acct)
+        except store.StoreError:
+            pass
+    return RedirectResponse("/mail", status_code=302)
+
+
+@app.get("/api/mail")
+def mail_list_api(request: Request, cat: str = Query("")):
+    if not _admin_user(request):
+        return {"ok": False, "error": "권한이 없습니다."}
+    acct = gmail.first_account()
+    if not acct:
+        return {"ok": False, "error": "Gmail이 연동되어 있지 않습니다."}
+    try:
+        return {"ok": True, "items": gmail.list_items(acct, cat)}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/mail/refresh")
+def mail_refresh_api(request: Request):
+    if not _admin_user(request):
+        return {"ok": False, "error": "권한이 없습니다."}
+    acct = gmail.first_account()
+    if not acct:
+        return {"ok": False, "error": "Gmail이 연동되어 있지 않습니다."}
+    try:
+        result = gmail.sync(acct)
+        return {"ok": True, **result}
+    except (gmail.GmailError, store.StoreError, summarize.SummarizeError) as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/mail/push")
+async def mail_push_api(request: Request, key: str = Query("")):
+    """Google Pub/Sub 푸시 수신 — 항상 200 (재시도 폭주 방지)."""
+    if not gmail.push_secret() or key != gmail.push_secret():
+        return {"ok": False}
+    try:
+        body = await request.json()
+        data = (body.get("message") or {}).get("data") or ""
+        import base64 as _b64
+        payload = json.loads(_b64.urlsafe_b64decode(data + "=" * (-len(data) % 4)))
+        acct = (payload.get("emailAddress") or "").lower()
+        if acct and gmail.connected(acct):
+            gmail.sync(acct)
+    except Exception:  # 실패해도 200 — 다음 푸시/새로고침에서 보정
+        pass
+    return {"ok": True}
+
+
+@app.post("/api/mail/{item_id}/calendar")
+def mail_calendar_api(request: Request, item_id: int):
+    if not _admin_user(request):
+        return {"ok": False, "error": "권한이 없습니다."}
+    acct = gmail.first_account()
+    if not acct:
+        return {"ok": False, "error": "Gmail이 연동되어 있지 않습니다."}
+    try:
+        item = gmail.get_item(acct, item_id)
+        if not item.get("schedule"):
+            return {"ok": False, "error": "이 메일에서 감지된 일정이 없습니다."}
+        link = gmail.add_calendar_event(
+            acct, item["schedule"],
+            description=f"{item.get('subject', '')} — 메일에서 등록")
+        return {"ok": True, "link": link}
+    except (gmail.GmailError, store.StoreError) as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/mail/{item_id}/task")
+def mail_task_api(request: Request, item_id: int, body: dict = Body(...)):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    text = str(body.get("text") or "").strip()
+    if not text:
+        return {"ok": False, "error": "할 일 내용이 비어 있습니다."}
+    try:
+        todos.add_todo(user, text, area="work", category="메일")
+        return {"ok": True}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/mail/{item_id}/dismiss")
+def mail_dismiss_api(request: Request, item_id: int):
+    if not _admin_user(request):
+        return {"ok": False, "error": "권한이 없습니다."}
+    acct = gmail.first_account()
+    if not acct:
+        return {"ok": False, "error": "Gmail이 연동되어 있지 않습니다."}
+    try:
+        gmail.set_status(acct, item_id, "dismissed")
         return {"ok": True}
     except store.StoreError as e:
         return {"ok": False, "error": str(e)}

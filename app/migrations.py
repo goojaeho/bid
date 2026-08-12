@@ -138,6 +138,33 @@ MIGRATIONS: list[tuple[int, str]] = [
         create index if not exists meetings_email_idx
           on meetings (email, created_at desc);
     """),
+    (11, """
+        create table if not exists google_tokens (
+          email text primary key,
+          refresh_token text not null,
+          history_id text,
+          watch_expiry bigint,
+          updated_at timestamptz not null default now()
+        );
+        create table if not exists mail_items (
+          id bigint generated always as identity primary key,
+          email text not null,
+          gmail_id text not null unique,
+          thread_id text not null default '',
+          sender text not null default '',
+          subject text not null default '',
+          snippet text not null default '',
+          received_at timestamptz,
+          category text not null default 'fyi',
+          summary text not null default '',
+          schedule jsonb,
+          tasks jsonb not null default '[]'::jsonb,
+          status text not null default 'new',
+          created_at timestamptz not null default now()
+        );
+        create index if not exists mail_items_email_idx
+          on mail_items (email, status, received_at desc);
+    """),
 ]
 
 _ran = False
