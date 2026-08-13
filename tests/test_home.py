@@ -121,7 +121,7 @@ class RoutingTest(unittest.TestCase):
                  {"done_at": today_done, "area": "work"}]):
             r = self.client.get("/", cookies=self.admin_cookie)
         self.assertEqual(r.status_code, 200)
-        for needle in ["오늘 완료", "최근 14일", "오늘 할 일", "할 일 관리 →",
+        for needle in ["오늘 완료", "최근 14일", "할 일 (", "할 일 관리 →",
                        "bar-seg work", "legend", "list-checks" if False else "할 일"]:
             self.assertIn(needle, r.text)
         # 대시보드에는 입력 폼이 없어야 함

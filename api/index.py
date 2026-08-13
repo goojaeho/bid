@@ -961,16 +961,21 @@ def _home_content(data: dict, st: dict) -> str:
         "</div></div>"
     )
 
-    today_items = [t for t in data["pending"]
-                   if t.get("due_date") and t["due_date"] <= today_iso]
-    rows = "".join(_todo_row(t, today_iso, is_child=bool(t.get("parent_id"))) for t in today_items[:8]) or \
-        '<li><span class="meta">오늘 마감인 할 일이 없습니다.</span></li>'
+    pending_items = data["pending"]
+    today_count = sum(1 for t in pending_items
+                      if t.get("due_date") and t["due_date"] <= today_iso)
+    rows = "".join(_todo_row(t, today_iso, is_child=bool(t.get("parent_id")))
+                   for t in pending_items[:12]) or \
+        '<li><span class="meta">대기 중인 할 일이 없습니다.</span></li>'
+    more = (f'<li><span class="meta">외 {len(pending_items) - 12}건 — '
+            '할 일 관리에서 전체 보기</span></li>'
+            if len(pending_items) > 12 else "")
     today_card = f"""<div class="card">
   <div class="row" style="justify-content:space-between">
-    <b style="font-size:0.92rem">오늘 할 일 ({len(today_items)})</b>
+    <b style="font-size:0.92rem">할 일 ({len(pending_items)}{f" · 오늘 마감 {today_count}" if today_count else ""})</b>
     <a href="/todo" style="font-size:0.84rem;font-weight:700">할 일 관리 →</a>
   </div>
-  <ul class="todo-list" style="margin-top:6px">{rows}</ul>
+  <ul class="todo-list" style="margin-top:6px">{rows}{more}</ul>
 </div>"""
 
     mail_card = ""
@@ -1029,7 +1034,7 @@ def _admin_user(request: Request) -> str | None:
     return user if (user and auth.is_admin(user)) else None
 
 
-TODO_VIEWS = {"today": "오늘", "upcoming": "예정", "all": "전체", "done": "완료"}
+TODO_VIEWS = {"all": "전체", "today": "오늘", "upcoming": "예정", "done": "완료"}
 TODO_AREA_TABS = {"": "전체", "work": icon("briefcase", 13) + " 업무", "personal": icon("leaf", 13) + " 개인"}
 
 
@@ -1043,7 +1048,7 @@ def _seg(base: str, options: dict, current: str, keep: dict) -> str:
 
 
 @app.get("/todo", response_class=HTMLResponse)
-def todo_page(request: Request, area: str = Query(""), view: str = Query("today")):
+def todo_page(request: Request, area: str = Query(""), view: str = Query("all")):
     redirect = gate(request)
     if redirect:
         return redirect
@@ -1051,7 +1056,7 @@ def todo_page(request: Request, area: str = Query(""), view: str = Query("today"
     if not auth.is_admin(user):
         return RedirectResponse("/bid", status_code=302)
     area = area if area in ("work", "personal") else ""
-    view = view if view in TODO_VIEWS else "today"
+    view = view if view in TODO_VIEWS else "all"
     today_iso = datetime.now(KST).date().isoformat()
 
     if not todos.enabled():
