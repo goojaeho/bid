@@ -165,6 +165,26 @@ MIGRATIONS: list[tuple[int, str]] = [
         create index if not exists mail_items_email_idx
           on mail_items (email, status, received_at desc);
     """),
+    (12, """
+        create table if not exists places (
+          id bigint generated always as identity primary key,
+          email text not null,
+          name text not null,
+          address text not null default '',
+          lat double precision,
+          lng double precision,
+          category text not null default '',
+          phone text not null default '',
+          place_url text not null default '',
+          status text not null default 'wish',
+          rating int,
+          menu text not null default '',
+          note text not null default '',
+          visited_at date,
+          created_at timestamptz not null default now()
+        );
+        create index if not exists places_email_idx on places (email, status);
+    """),
 ]
 
 _ran = False

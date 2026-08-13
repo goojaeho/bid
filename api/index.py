@@ -26,7 +26,7 @@ from fastapi.responses import RedirectResponse
 from fastapi import Body
 
 from app import (auth, english, genie, gmail, gov_sources, kakao, meetings,
-                 migrations, searches, store, summarize, todos)
+                 migrations, places, searches, store, summarize, todos)
 from app.g2b_client import CATEGORIES, G2BApiError, G2BClient
 from app.webui import icon, layout
 
@@ -3764,6 +3764,369 @@ def mail_dismiss_api(request: Request, item_id: int):
         return {"ok": False, "error": "Gmail이 연동되어 있지 않습니다."}
     try:
         gmail.set_status(acct, item_id, "dismissed")
+        return {"ok": True}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ------------------------------------------------- 맛집 (카카오맵)
+
+PLACES_SETUP_CARD = """<div class="card"><p class="error" style="margin:0 0 8px">
+카카오맵 키(KAKAO_JS_KEY)가 아직 설정되지 않았습니다.</p>
+<p class="meta" style="margin:0">
+1. <a href="https://developers.kakao.com" target="_blank">카카오 개발자 콘솔</a> → 내 애플리케이션 → (기존 앱) → 앱 키에서 <b>JavaScript 키</b> 복사<br>
+2. 같은 앱의 플랫폼 → Web에 <b>https://www.oneaigen.com</b> 도메인이 등록돼 있는지 확인 (없으면 추가)<br>
+3. Vercel 환경변수 <b>KAKAO_JS_KEY</b>에 붙여넣고 Redeploy</p></div>"""
+
+PLACES_PAGE = """<div class="pl-studio">
+  <div class="pl-main">
+    <div id="pl-map"></div>
+  </div>
+  <aside class="pl-panel">
+    <div class="row" style="gap:6px">
+      <input type="text" id="pl-q" placeholder="가게 이름·지역으로 검색" style="flex:1;min-width:0">
+      <button type="button" id="pl-search">검색</button>
+    </div>
+    <div id="pl-results"></div>
+    <div class="seg" id="pl-tabs" style="width:100%;justify-content:stretch">
+      <a href="#" data-tab="wish" class="on" style="flex:1;text-align:center">가고싶은 곳</a>
+      <a href="#" data-tab="visited" style="flex:1;text-align:center">가봤던 곳</a>
+    </div>
+    <div id="pl-list" class="meta">불러오는 중…</div>
+  </aside>
+</div>
+<style>
+  .pl-studio { display: flex; gap: 16px; align-items: stretch; }
+  .pl-main { flex: 1; min-width: 0; }
+  #pl-map { width: 100%; height: calc(100vh - 170px); min-height: 480px;
+            border-radius: var(--r-lg); background: var(--fill); box-shadow: var(--shadow); }
+  .pl-panel { width: 300px; flex-shrink: 0; background: var(--card);
+              border-radius: var(--r-lg); box-shadow: var(--shadow); padding: 14px;
+              display: flex; flex-direction: column; gap: 10px;
+              max-height: calc(100vh - 170px); }
+  #pl-results { display: none; flex-direction: column; gap: 2px; max-height: 220px;
+                overflow-y: auto; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+  #pl-results.show { display: flex; }
+  .pl-res { padding: 8px; border-radius: 8px; cursor: pointer; font-size: 0.85rem; }
+  .pl-res:hover { background: var(--fill); }
+  .pl-res b { display: block; }
+  .pl-res span { color: var(--muted); font-size: 0.76rem; }
+  .pl-res button { float: right; padding: 4px 10px; font-size: 0.75rem; border-radius: 7px; }
+  #pl-list { flex: 1; overflow-y: auto; margin: 0; }
+  .pl-item { padding: 10px 6px; border-bottom: 1px solid #f4f5f7; cursor: pointer; }
+  .pl-item:last-child { border-bottom: none; }
+  .pl-item:hover { background: #f7f9fb; }
+  .pl-item b { font-size: 0.9rem; color: var(--text); }
+  .pl-item .cat { margin-left: 6px; }
+  .pl-item .addr { color: var(--muted); font-size: 0.76rem; margin-top: 2px; }
+  .pl-stars { color: #f5a623; font-size: 0.85rem; letter-spacing: 1px; }
+  .pl-meta { color: var(--sub); font-size: 0.8rem; margin-top: 3px; }
+  .pl-edit { background: #f7f9fb; border-radius: 10px; padding: 10px; margin-top: 8px;
+             cursor: default; }
+  .pl-edit .row { margin-top: 6px; }
+  .pl-edit input { font-size: 0.84rem; padding: 7px 10px; }
+  .star-btn { background: none; border: none; font-size: 1.3rem; cursor: pointer;
+              padding: 0 2px; color: #d5d9e2; }
+  .star-btn.on { color: #f5a623; }
+  .pl-small { font-size: 0.76rem; padding: 5px 10px; border-radius: 7px; }
+  @media (max-width: 900px) {
+    .pl-studio { flex-direction: column; }
+    #pl-map { height: 42vh; min-height: 280px; }
+    .pl-panel { width: auto; max-height: none; }
+    #pl-list { max-height: 50vh; }
+  }
+</style>
+<script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=__KAKAO_KEY__&libraries=services&autoload=false"></script>
+<script>
+(function () {
+  var map = null, ps = null, info = null;
+  var tempMarker = null, myMarkers = [];
+  var tab = "wish";
+  var items = [];
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function post(url, body) {
+    return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(body || {}) }).then(function (r) { return r.json(); });
+  }
+  function stars(n) { return "★★★★★".slice(0, n || 0) + "☆☆☆☆☆".slice(0, 5 - (n || 0)); }
+
+  if (!window.kakao || !kakao.maps) {
+    $("pl-map").innerHTML = '<p class="error" style="margin:14px">카카오맵을 불러오지 못했습니다. ' +
+      '카카오 개발자 콘솔의 Web 플랫폼에 이 도메인이 등록돼 있는지 확인해주세요.</p>';
+    return;
+  }
+
+  kakao.maps.load(function () {
+    map = new kakao.maps.Map($("pl-map"),
+      { center: new kakao.maps.LatLng(35.8714, 128.6014), level: 5 });  // 대구 기준
+    ps = new kakao.maps.services.Places();
+    info = new kakao.maps.InfoWindow({ zIndex: 2 });
+    loadMine();
+  });
+
+  // ---------- 검색
+  function doSearch() {
+    var q = $("pl-q").value.trim();
+    if (!q || !ps) return;
+    ps.keywordSearch(q, function (data, status) {
+      var box = $("pl-results");
+      box.innerHTML = "";
+      box.classList.add("show");
+      if (status !== kakao.maps.services.Status.OK || !data.length) {
+        box.appendChild(el("div", "meta", "검색 결과가 없습니다."));
+        return;
+      }
+      data.slice(0, 8).forEach(function (p) {
+        var row = el("div", "pl-res");
+        var save = el("button", "", "저장");
+        save.type = "button";
+        save.addEventListener("click", function (ev) {
+          ev.stopPropagation();
+          save.disabled = true;
+          post("/api/places", {
+            name: p.place_name, address: p.road_address_name || p.address_name,
+            lat: p.y, lng: p.x, category: (p.category_name || "").split(">").pop().trim(),
+            phone: p.phone, place_url: p.place_url,
+          }).then(function (d) {
+            save.disabled = false;
+            if (!d.ok) { alert(d.error || "저장 실패"); return; }
+            save.textContent = "저장됨";
+            box.classList.remove("show");
+            $("pl-q").value = "";
+            loadMine();
+          });
+        });
+        row.appendChild(save);
+        row.appendChild(el("b", "", p.place_name));
+        row.appendChild(el("span", "", (p.road_address_name || p.address_name || "")));
+        row.addEventListener("click", function () { showTemp(p); });
+        box.appendChild(row);
+      });
+      showTemp(data[0]);
+    });
+  }
+  function showTemp(p) {
+    var pos = new kakao.maps.LatLng(p.y, p.x);
+    if (tempMarker) tempMarker.setMap(null);
+    tempMarker = new kakao.maps.Marker({ map: map, position: pos });
+    map.panTo(pos);
+    info.setContent('<div style="padding:6px 10px;font-size:12px">' + p.place_name + "</div>");
+    info.open(map, tempMarker);
+  }
+  $("pl-search").addEventListener("click", doSearch);
+  $("pl-q").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); doSearch(); }
+  });
+
+  // ---------- 내 목록
+  function loadMine() {
+    fetch("/api/places").then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.ok) { $("pl-list").textContent = d.error || "오류"; return; }
+      items = d.items;
+      renderList();
+      renderMarkers();
+    }).catch(function () {});
+  }
+
+  function renderMarkers() {
+    myMarkers.forEach(function (m) { m.setMap(null); });
+    myMarkers = [];
+    if (!map) return;
+    items.forEach(function (p) {
+      if (!p.lat || !p.lng) return;
+      var marker = new kakao.maps.Marker({
+        map: map, position: new kakao.maps.LatLng(p.lat, p.lng),
+        opacity: p.status === "visited" ? 1 : 0.55,
+      });
+      kakao.maps.event.addListener(marker, "click", function () {
+        info.setContent('<div style="padding:6px 10px;font-size:12px"><b>' + p.name + "</b>"
+          + (p.status === "visited" ? "<br>" + stars(p.rating)
+             + (p.menu ? "<br>" + p.menu : "") : "<br>가보고 싶은 곳") + "</div>");
+        info.open(map, marker);
+      });
+      myMarkers.push(marker);
+    });
+  }
+
+  function renderList() {
+    var list = $("pl-list");
+    list.innerHTML = "";
+    var subset = items.filter(function (p) { return p.status === tab; });
+    if (!subset.length) {
+      list.textContent = tab === "wish"
+        ? "저장된 곳이 없습니다. 위에서 검색해 추가해보세요."
+        : "아직 다녀온 곳이 없습니다.";
+      return;
+    }
+    subset.forEach(function (p) { list.appendChild(item(p)); });
+  }
+
+  function item(p) {
+    var row = el("div", "pl-item");
+    var head = el("div", "");
+    head.appendChild(el("b", "", p.name));
+    if (p.category) head.appendChild(el("span", "cat " + "cat-default", p.category));
+    row.appendChild(head);
+    if (p.status === "visited") {
+      var meta = el("div", "pl-meta");
+      meta.innerHTML = '<span class="pl-stars">' + stars(p.rating) + "</span>"
+        + (p.visited_at ? ' · ' + p.visited_at : "");
+      row.appendChild(meta);
+      if (p.menu) row.appendChild(el("div", "pl-meta", "먹은 것: " + p.menu));
+      if (p.note) row.appendChild(el("div", "pl-meta", p.note));
+    }
+    if (p.address) row.appendChild(el("div", "addr", p.address));
+    var edit = null;
+    row.addEventListener("click", function () {
+      if (p.lat && p.lng && map) {
+        map.panTo(new kakao.maps.LatLng(p.lat, p.lng));
+      }
+      if (edit) { edit.remove(); edit = null; return; }
+      edit = buildEdit(p);
+      row.appendChild(edit);
+    });
+    return row;
+  }
+
+  function buildEdit(p) {
+    var box = el("div", "pl-edit");
+    box.addEventListener("click", function (e) { e.stopPropagation(); });
+    var rating = p.rating || 0;
+    var starRow = el("div", "");
+    var starBtns = [];
+    for (var i = 1; i <= 5; i++) (function (n) {
+      var b = el("button", "star-btn" + (n <= rating ? " on" : ""), "★");
+      b.type = "button";
+      b.addEventListener("click", function () {
+        rating = n;
+        starBtns.forEach(function (sb, idx) { sb.classList.toggle("on", idx < n); });
+      });
+      starBtns.push(b);
+      starRow.appendChild(b);
+    })(i);
+    box.appendChild(starRow);
+    var menu = el("input", "");
+    menu.type = "text";
+    menu.placeholder = "먹은 메뉴 (예: 등심 2인, 된장찌개)";
+    menu.value = p.menu || "";
+    var mr = el("div", "row"); mr.appendChild(menu); box.appendChild(mr);
+    var note = el("input", "");
+    note.type = "text";
+    note.placeholder = "한줄평 (선택)";
+    note.value = p.note || "";
+    var nr = el("div", "row"); nr.appendChild(note); box.appendChild(nr);
+    var btns = el("div", "row");
+    var save = el("button", "pl-small", p.status === "wish" ? "다녀왔어요! 기록 저장" : "기록 수정");
+    save.type = "button";
+    save.addEventListener("click", function () {
+      post("/api/places/" + p.id + "/update", {
+        status: "visited", rating: rating, menu: menu.value, note: note.value,
+      }).then(function (d) {
+        if (!d.ok) { alert(d.error || "저장 실패"); return; }
+        loadMine();
+      });
+    });
+    btns.appendChild(save);
+    if (p.status === "visited") {
+      var back = el("button", "pl-small chip-save", "가고싶은 곳으로");
+      back.type = "button";
+      back.addEventListener("click", function () {
+        post("/api/places/" + p.id + "/update", { status: "wish" }).then(loadMine);
+      });
+      btns.appendChild(back);
+    }
+    if (p.place_url) {
+      var link = el("a", "pl-small chip chip-save", "카카오맵에서 보기");
+      link.href = p.place_url;
+      link.target = "_blank";
+      btns.appendChild(link);
+    }
+    var del = el("button", "link-btn", "삭제");
+    del.type = "button";
+    del.addEventListener("click", function () {
+      if (!confirm('"' + p.name + '" 을(를) 삭제할까요?')) return;
+      post("/api/places/" + p.id + "/delete").then(loadMine);
+    });
+    btns.appendChild(del);
+    box.appendChild(btns);
+    return box;
+  }
+
+  document.getElementById("pl-tabs").addEventListener("click", function (e) {
+    var a = e.target.closest("a[data-tab]");
+    if (!a) return;
+    e.preventDefault();
+    tab = a.dataset.tab;
+    this.querySelectorAll("a").forEach(function (x) { x.classList.toggle("on", x === a); });
+    renderList();
+  });
+})();
+</script>"""
+
+
+@app.get("/places", response_class=HTMLResponse)
+def places_page(request: Request):
+    redirect = gate(request)
+    if redirect:
+        return redirect
+    user = user_of(request)
+    if not auth.is_admin(user):
+        return RedirectResponse("/bid", status_code=302)
+    js_key = os.environ.get("KAKAO_JS_KEY", "").strip()
+    content = (PLACES_PAGE.replace("__KAKAO_KEY__", js_key)
+               if js_key else PLACES_SETUP_CARD)
+    return layout("맛집", icon("utensils", 20) + " 맛집", "/places",
+                  content, user=user, admin=True)
+
+
+@app.get("/api/places")
+def places_list_api(request: Request):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        return {"ok": True, "items": places.list_places(user)}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/places")
+def places_add_api(request: Request, body: dict = Body(...)):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        return {"ok": True, "item": places.add_place(user, body)}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/places/{place_id}/update")
+def places_update_api(request: Request, place_id: int, body: dict = Body(...)):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        places.update_place(user, place_id, body)
+        return {"ok": True}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/places/{place_id}/delete")
+def places_delete_api(request: Request, place_id: int):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        places.delete_place(user, place_id)
         return {"ok": True}
     except store.StoreError as e:
         return {"ok": False, "error": str(e)}

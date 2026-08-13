@@ -9,7 +9,8 @@ os.environ["G2B_SERVICE_KEY"] = "dummy"
 from fastapi.testclient import TestClient
 
 import api.index as web
-from app import auth, english, genie, gmail, meetings, searches, summarize, todos
+from app import (auth, english, genie, gmail, meetings, places, searches,
+                 summarize, todos)
 from app.store import StoreError
 
 KST = ZoneInfo("Asia/Seoul")
@@ -562,6 +563,63 @@ class MailTest(unittest.TestCase):
         self.assertTrue(r.json()["ok"])
         self.assertEqual(captured["title"], "제안서 회신하기")
         self.assertEqual(captured["category"], "메일")
+
+
+class PlacesTest(unittest.TestCase):
+    """맛집 — 카카오맵 페이지·CRUD 검증 (관리자 전용)."""
+
+    def setUp(self):
+        os.environ["GOOGLE_CLIENT_ID"] = "cid"
+        os.environ["GOOGLE_CLIENT_SECRET"] = "sec"
+        os.environ["ADMIN_EMAILS"] = "boss@company.com"
+        self.client = TestClient(web.app)
+        self.admin_cookie = {auth.COOKIE_NAME: auth.make_session("boss@company.com")}
+        self.user_cookie = {auth.COOKIE_NAME: auth.make_session("guest@gmail.com")}
+
+    def tearDown(self):
+        for k in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "ADMIN_EMAILS",
+                  "KAKAO_JS_KEY"):
+            os.environ.pop(k, None)
+
+    def test_non_admin_blocked(self):
+        r = self.client.get("/places", cookies=self.user_cookie,
+                            follow_redirects=False)
+        self.assertEqual((r.status_code, r.headers["location"]), (302, "/bid"))
+        r = self.client.get("/api/places", cookies=self.user_cookie)
+        self.assertFalse(r.json()["ok"])
+
+    def test_setup_card_without_key(self):
+        r = self.client.get("/places", cookies=self.admin_cookie)
+        self.assertIn("KAKAO_JS_KEY", r.text)
+
+    def test_page_renders_with_key(self):
+        os.environ["KAKAO_JS_KEY"] = "jskey123"
+        r = self.client.get("/places", cookies=self.admin_cookie)
+        for marker in ("pl-map", "pl-search", "가고싶은 곳", "가봤던 곳",
+                       "dapi.kakao.com/v2/maps/sdk.js?appkey=jskey123"):
+            self.assertIn(marker, r.text, marker)
+
+    def test_update_place_validation(self):
+        sent = {}
+        with patch.object(todos, "_request",
+                          side_effect=lambda m, p, **kw: sent.update(kw) or
+                          type("R", (), {"json": lambda self: []})()):
+            places.update_place("e@x.com", 1,
+                                {"status": "visited", "rating": 5,
+                                 "menu": " 등심 ", "bogus": "x"})
+        self.assertEqual(sent["json"]["status"], "visited")
+        self.assertEqual(sent["json"]["rating"], 5)
+        self.assertEqual(sent["json"]["menu"], "등심")
+        self.assertIn("visited_at", sent["json"])
+        self.assertNotIn("bogus", sent["json"])
+        with patch.object(todos, "_request"):
+            with self.assertRaises(StoreError):
+                places.update_place("e@x.com", 1, {"bogus": "x"})
+
+    def test_add_place_requires_name(self):
+        with patch.object(todos, "_request"):
+            with self.assertRaises(StoreError):
+                places.add_place("e@x.com", {"name": "  "})
 
 
 if __name__ == "__main__":
