@@ -63,11 +63,12 @@ BASE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="only light">
 <title>__TITLE__</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/sun-typeface/SUIT@2/fonts/static/woff2/SUIT.css">
 <style>
   :root {
-    color-scheme: light;
+    color-scheme: only light;
     --accent: #3182f6;
     --accent-dark: #1b64da;
     --accent-soft: #e8f3ff;
@@ -390,6 +391,10 @@ BASE = """<!doctype html>
     .stat-row { gap: 10px; }
     .stat-tile { flex: 1 1 42%; min-width: 0; padding: 14px 16px; }
     .stat-tile .num { font-size: 1.45rem; }
+    /* 할 일 행: 제목 폭 확보, 버튼들은 다음 줄로 */
+    .todo-list li { flex-wrap: wrap; row-gap: 6px; }
+    .todo-list .tt { flex: 1 1 55%; min-width: 150px; }
+    .todo-list .todo-act { padding: 6px 11px; }
     table { font-size: 0.84rem; }
     th, td { padding: 10px 10px; }
     .panel-grid { grid-template-columns: 76px 1fr; }
