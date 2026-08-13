@@ -358,17 +358,41 @@ BASE = """<!doctype html>
   @media (max-width: 720px) {
     .shell { flex-direction: column; }
     .sidebar {
-      width: auto; height: auto; position: static;
-      flex-direction: row; align-items: center; gap: 12px;
-      padding: 10px 12px; overflow-x: auto; border-right: none;
+      width: auto; height: auto; position: sticky; top: 0; z-index: 100;
+      flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px;
+      padding: 10px 12px 0; border-right: none;
       border-bottom: 1px solid var(--line);
+      box-shadow: 0 1px 4px rgba(25,31,40,0.06);
     }
-    nav { flex-direction: row; }
-    nav a { padding: 8px 11px; white-space: nowrap; }
-    .side-foot { margin-top: 0; margin-left: auto; white-space: nowrap; line-height: 1.3;
-                 border-top: none; padding: 0; }
-    main { padding: 16px 12px 40px; }
-    .card { padding: 14px; }
+    .brand { padding: 0; font-size: 1.02rem; }
+    .side-foot {
+      margin-top: 0; margin-left: auto; white-space: nowrap; line-height: 1.4;
+      border-top: none; padding: 0; font-size: 0.72rem;
+    }
+    .side-foot a { margin-left: 6px; }
+    nav {
+      order: 3; width: 100%; flex-direction: row; gap: 2px;
+      overflow-x: auto; -webkit-overflow-scrolling: touch;
+      scrollbar-width: none; margin: 4px -12px 0; padding: 0 12px 8px;
+    }
+    nav::-webkit-scrollbar { display: none; }
+    nav a { padding: 8px 12px; white-space: nowrap; font-size: 0.88rem; flex-shrink: 0; }
+    main { padding: 16px 14px 48px; }
+    h1 { font-size: 1.2rem; margin-bottom: 14px; }
+    .card { padding: 16px; }
+    /* 폼: 모바일에서 앱처럼 세로 배치 */
+    .row input[type=text], .row input[type=number] {
+      flex: 1 1 100%; min-width: 0; width: auto;
+    }
+    .row input.org, .row input.amt { flex: 1 1 40%; min-width: 0; width: auto; }
+    .row select { flex: 1 1 44%; min-width: 0; }
+    .row button[type=submit] { flex: 1 1 100%; }
+    .stat-row { gap: 10px; }
+    .stat-tile { flex: 1 1 42%; min-width: 0; padding: 14px 16px; }
+    .stat-tile .num { font-size: 1.45rem; }
+    table { font-size: 0.84rem; }
+    th, td { padding: 10px 10px; }
+    .panel-grid { grid-template-columns: 76px 1fr; }
   }
 </style>
 </head>
@@ -388,6 +412,13 @@ __FOOTER__
 </div>
 </div>
 <script>
+// 모바일: 현재 탭이 가로 스크롤 네비 안에서 보이도록
+(function () {
+  var active = document.querySelector("nav a.active");
+  if (active && window.innerWidth <= 720) {
+    active.scrollIntoView({ block: "nearest", inline: "center" });
+  }
+})();
 var AI_ON = document.body.dataset.ai === "1";
 var SERVER_FAVS = document.body.dataset.sf === "1";
 var FAV_KEY = "oag_favs";

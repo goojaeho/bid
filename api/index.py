@@ -1311,6 +1311,12 @@ PDF_PAGE = """<div class="pdf-studio">
     .pdf-studio { flex-direction: column-reverse; }
     .pdf-panel { width: auto; position: static; }
   }
+  @media (max-width: 720px) {
+    .viewer-body { padding: 0 10px 16px; }
+    .viewer-nav { width: 36px; height: 56px; font-size: 1.4rem; }
+    #drop-zone { padding: 56px 16px; }
+    .pdf-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+  }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
@@ -3470,6 +3476,11 @@ MAIL_PAGE = """<div class="row" style="margin-bottom:12px">
                font-size: 0.86rem; cursor: default; }
   .ml-detail .row { margin-top: 8px; }
   .ml-done { opacity: 0.55; }
+  @media (max-width: 720px) {
+    .ml-head { flex-wrap: wrap; }
+    .ml-sender { max-width: 140px; }
+    .ml-subject { flex-basis: 100%; order: 5; white-space: normal; }
+  }
 </style>
 <script>
 (function () {
