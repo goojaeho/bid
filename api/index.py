@@ -3973,7 +3973,7 @@ PLACES_PAGE = """<div class="pl-studio">
     map = new kakao.maps.Map($("pl-map"),
       { center: new kakao.maps.LatLng(35.8714, 128.6014), level: 5 });  // 기본: 대구
     ps = new kakao.maps.services.Places();
-    info = new kakao.maps.CustomOverlay({ zIndex: 5, yAnchor: 1.35 });
+    info = new kakao.maps.CustomOverlay({ zIndex: 5, yAnchor: 1.35, clickable: true });
     kakao.maps.event.addListener(map, "click", window.closeBubble);
     loadMine();
     locate(true);  // 위치 허용 시 현재 위치로 이동
