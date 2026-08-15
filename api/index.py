@@ -3942,7 +3942,19 @@ PLACES_PAGE = """<div class="pl-studio">
         });
         row.appendChild(save);
         row.appendChild(el("b", "", p.place_name));
+        var sub = [(p.category_name || "").split(">").pop().trim(),
+                   p.phone, p.distance ? Math.round(p.distance) + "m" : ""]
+          .filter(Boolean).join(" · ");
+        if (sub) row.appendChild(el("span", "", sub));
         row.appendChild(el("span", "", (p.road_address_name || p.address_name || "")));
+        if (p.place_url) {
+          var more = el("a", "", "카카오맵 상세보기 →");
+          more.href = p.place_url;
+          more.target = "_blank";
+          more.style.cssText = "display:block;font-size:0.76rem;font-weight:700;margin-top:2px";
+          more.addEventListener("click", function (ev) { ev.stopPropagation(); });
+          row.appendChild(more);
+        }
       row.addEventListener("click", function () { showTemp(p); });
       box.appendChild(row);
       var mk = new kakao.maps.Marker({
@@ -3972,7 +3984,16 @@ PLACES_PAGE = """<div class="pl-studio">
     if (tempMarker) tempMarker.setMap(null);
     tempMarker = new kakao.maps.Marker({ map: map, position: pos });
     map.panTo(pos);
-    info.setContent('<div style="padding:6px 10px;font-size:12px">' + p.place_name + "</div>");
+    var infoHtml = '<div style="padding:7px 10px;font-size:12px;max-width:220px"><b>'
+      + p.place_name + "</b>";
+    var infoSub = [(p.category_name || "").split(">").pop().trim(), p.phone]
+      .filter(Boolean).join(" · ");
+    if (infoSub) infoHtml += "<br>" + infoSub;
+    if (p.place_url) {
+      infoHtml += '<br><a href="' + p.place_url + '" target="_blank" '
+        + 'style="color:#3182f6;font-weight:700">카카오맵 상세보기 →</a>';
+    }
+    info.setContent(infoHtml + "</div>");
     info.open(map, tempMarker);
   }
   $("pl-search").addEventListener("click", doSearch);
@@ -4001,9 +4022,12 @@ PLACES_PAGE = """<div class="pl-studio">
         opacity: p.status === "visited" ? 1 : 0.55,
       });
       kakao.maps.event.addListener(marker, "click", function () {
-        info.setContent('<div style="padding:6px 10px;font-size:12px"><b>' + p.name + "</b>"
+        info.setContent('<div style="padding:7px 10px;font-size:12px;max-width:220px"><b>' + p.name + "</b>"
           + (p.status === "visited" ? "<br>" + stars(p.rating)
-             + (p.menu ? "<br>" + p.menu : "") : "<br>가보고 싶은 곳") + "</div>");
+             + (p.menu ? "<br>" + p.menu : "") : "<br>가보고 싶은 곳")
+          + (p.place_url ? '<br><a href="' + p.place_url + '" target="_blank" '
+             + 'style="color:#3182f6;font-weight:700">카카오맵 상세보기 →</a>' : "")
+          + "</div>");
         info.open(map, marker);
       });
       myMarkers.push(marker);
