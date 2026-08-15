@@ -3963,8 +3963,7 @@ PLACES_PAGE = """<div class="pl-studio">
     b.addEventListener("click", function () {
       if (!ps || !map) return;
       ps.categorySearch(b.dataset.code, renderResults, {
-        location: map.getCenter(), radius: 1000,
-        sort: kakao.maps.services.SortBy.DISTANCE,
+        bounds: map.getBounds(),  // 지금 화면에 보이는 영역 기준
       });
     });
   });
