@@ -3800,6 +3800,18 @@ PLACES_PAGE = """<div class="pl-studio">
     <div id="pl-list" class="meta">불러오는 중…</div>
   </aside>
 </div>
+<div id="place-viewer" hidden>
+  <div class="pv-box">
+    <div class="pv-head">
+      <b id="pv-title"></b>
+      <span>
+        <a id="pv-open" href="#" target="_blank">새 탭에서 열기</a>
+        <button type="button" id="pv-close" title="닫기 (ESC)">✕</button>
+      </span>
+    </div>
+    <iframe id="pv-frame" src="about:blank"></iframe>
+  </div>
+</div>
 <style>
   .pl-studio { display: flex; gap: 16px; align-items: stretch; }
   .pl-main { flex: 1; min-width: 0; }
@@ -3839,6 +3851,20 @@ PLACES_PAGE = """<div class="pl-studio">
               padding: 0 2px; color: #d5d9e2; }
   .star-btn.on { color: #f5a623; }
   .pl-small { font-size: 0.76rem; padding: 5px 10px; border-radius: 7px; }
+  #place-viewer { position: fixed; inset: 0; z-index: 1000; background: rgba(25,31,40,0.55);
+                  display: flex; align-items: center; justify-content: center; }
+  #place-viewer[hidden] { display: none; }
+  .pv-box { width: min(480px, 94vw); height: min(760px, 92vh); background: var(--card);
+            border-radius: var(--r-lg); overflow: hidden; display: flex;
+            flex-direction: column; box-shadow: 0 12px 48px rgba(0,0,0,0.35); }
+  .pv-head { display: flex; justify-content: space-between; align-items: center;
+             padding: 10px 14px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+  .pv-head b { font-size: 0.92rem; overflow: hidden; text-overflow: ellipsis;
+               white-space: nowrap; }
+  .pv-head a { font-size: 0.78rem; font-weight: 700; margin-right: 10px; }
+  .pv-head button { background: var(--fill); border: none; color: var(--sub);
+                    border-radius: 8px; padding: 5px 11px; cursor: pointer; }
+  #pv-frame { flex: 1; width: 100%; border: none; }
   @media (max-width: 900px) {
     .pl-studio { flex-direction: column; }
     #pl-map { height: 42vh; min-height: 280px; }
@@ -3866,6 +3892,27 @@ PLACES_PAGE = """<div class="pl-studio">
                         body: JSON.stringify(body || {}) }).then(function (r) { return r.json(); });
   }
   function stars(n) { return "★★★★★".slice(0, n || 0) + "☆☆☆☆☆".slice(0, 5 - (n || 0)); }
+
+  window.openPlace = function (url, name) {
+    if (!url) return;
+    url = url.replace(/^http:/, "https:");
+    document.getElementById("pv-title").textContent = name || "가게 상세";
+    document.getElementById("pv-open").href = url;
+    document.getElementById("pv-frame").src = url;
+    document.getElementById("place-viewer").hidden = false;
+    return false;
+  };
+  function closePlace() {
+    document.getElementById("place-viewer").hidden = true;
+    document.getElementById("pv-frame").src = "about:blank";
+  }
+  document.getElementById("pv-close").addEventListener("click", closePlace);
+  document.getElementById("place-viewer").addEventListener("click", function (e) {
+    if (e.target === this) closePlace();
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && !document.getElementById("place-viewer").hidden) closePlace();
+  });
 
   if (!window.kakao || !kakao.maps) {
     $("pl-map").innerHTML = '<p class="error" style="margin:14px">카카오맵을 불러오지 못했습니다. ' +
@@ -3948,11 +3995,14 @@ PLACES_PAGE = """<div class="pl-studio">
         if (sub) row.appendChild(el("span", "", sub));
         row.appendChild(el("span", "", (p.road_address_name || p.address_name || "")));
         if (p.place_url) {
-          var more = el("a", "", "카카오맵 상세보기 →");
-          more.href = p.place_url;
-          more.target = "_blank";
+          var more = el("a", "", "상세보기 (사진·리뷰) →");
+          more.href = "#";
           more.style.cssText = "display:block;font-size:0.76rem;font-weight:700;margin-top:2px";
-          more.addEventListener("click", function (ev) { ev.stopPropagation(); });
+          more.addEventListener("click", function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            openPlace(p.place_url, p.place_name);
+          });
           row.appendChild(more);
         }
       row.addEventListener("click", function () { showTemp(p); });
@@ -3990,8 +4040,10 @@ PLACES_PAGE = """<div class="pl-studio">
       .filter(Boolean).join(" · ");
     if (infoSub) infoHtml += "<br>" + infoSub;
     if (p.place_url) {
-      infoHtml += '<br><a href="' + p.place_url + '" target="_blank" '
-        + 'style="color:#3182f6;font-weight:700">카카오맵 상세보기 →</a>';
+      infoHtml += '<br><a href="#" data-u="' + p.place_url + '" data-n="'
+        + String(p.place_name || "").replace(/["<>]/g, "") + '" '
+        + 'onclick="return openPlace(this.dataset.u, this.dataset.n)" '
+        + 'style="color:#3182f6;font-weight:700">상세보기 (사진·리뷰) →</a>';
     }
     info.setContent(infoHtml + "</div>");
     info.open(map, tempMarker);
@@ -4025,8 +4077,10 @@ PLACES_PAGE = """<div class="pl-studio">
         info.setContent('<div style="padding:7px 10px;font-size:12px;max-width:220px"><b>' + p.name + "</b>"
           + (p.status === "visited" ? "<br>" + stars(p.rating)
              + (p.menu ? "<br>" + p.menu : "") : "<br>가보고 싶은 곳")
-          + (p.place_url ? '<br><a href="' + p.place_url + '" target="_blank" '
-             + 'style="color:#3182f6;font-weight:700">카카오맵 상세보기 →</a>' : "")
+          + (p.place_url ? '<br><a href="#" data-u="' + p.place_url + '" data-n="'
+             + String(p.name || "").replace(/["<>]/g, "") + '" '
+             + 'onclick="return openPlace(this.dataset.u, this.dataset.n)" '
+             + 'style="color:#3182f6;font-weight:700">상세보기 (사진·리뷰) →</a>' : "")
           + "</div>");
         info.open(map, marker);
       });
@@ -4122,9 +4176,12 @@ PLACES_PAGE = """<div class="pl-studio">
       btns.appendChild(back);
     }
     if (p.place_url) {
-      var link = el("a", "pl-small chip chip-save", "카카오맵에서 보기");
-      link.href = p.place_url;
-      link.target = "_blank";
+      var link = el("a", "pl-small chip chip-save", "상세보기 (사진·리뷰)");
+      link.href = "#";
+      link.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        openPlace(p.place_url, p.name);
+      });
       btns.appendChild(link);
     }
     var del = el("button", "link-btn", "삭제");
