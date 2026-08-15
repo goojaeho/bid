@@ -3859,6 +3859,16 @@ PLACES_PAGE = """<div class="pl-studio">
               padding: 0 2px; color: #d5d9e2; }
   .star-btn.on { color: #f5a623; }
   .pl-small { font-size: 0.76rem; padding: 5px 10px; border-radius: 7px; }
+  .map-bubble { position: relative; background: #fff; color: #191f28;
+                border: 1px solid #d5d9e2; border-radius: 10px; padding: 9px 26px 9px 12px;
+                font-size: 12px; line-height: 1.5; max-width: 230px; width: max-content;
+                box-shadow: 0 4px 14px rgba(25,31,40,0.18); word-break: keep-all; }
+  .map-bubble::after { content: ""; position: absolute; left: 50%; bottom: -7px;
+                       margin-left: -7px; border-width: 7px 7px 0; border-style: solid;
+                       border-color: #fff transparent transparent; }
+  .map-bubble a { color: #3182f6; font-weight: 700; }
+  .map-bubble .mb-x { position: absolute; top: 4px; right: 6px; cursor: pointer;
+                      color: #8b95a1; font-weight: 700; font-size: 13px; }
   #place-viewer { position: fixed; inset: 0; z-index: 1000; background: rgba(25,31,40,0.55);
                   display: flex; align-items: center; justify-content: center; }
   #place-viewer[hidden] { display: none; }
@@ -3950,11 +3960,21 @@ PLACES_PAGE = """<div class="pl-studio">
     }, { enableHighAccuracy: true, timeout: 7000, maximumAge: 60000 });
   }
 
+  window.closeBubble = function () { if (info) info.setMap(null); };
+  function openBubble(pos, innerHtml) {
+    if (!info) return;
+    info.setContent('<div class="map-bubble">'
+      + '<span class="mb-x" onclick="closeBubble()">✕</span>' + innerHtml + "</div>");
+    info.setPosition(pos);
+    info.setMap(map);
+  }
+
   kakao.maps.load(function () {
     map = new kakao.maps.Map($("pl-map"),
       { center: new kakao.maps.LatLng(35.8714, 128.6014), level: 5 });  // 기본: 대구
     ps = new kakao.maps.services.Places();
-    info = new kakao.maps.InfoWindow({ zIndex: 2 });
+    info = new kakao.maps.CustomOverlay({ zIndex: 5, yAnchor: 1.35 });
+    kakao.maps.event.addListener(map, "click", window.closeBubble);
     loadMine();
     locate(true);  // 위치 허용 시 현재 위치로 이동
   });
@@ -4042,19 +4062,17 @@ PLACES_PAGE = """<div class="pl-studio">
     if (tempMarker) tempMarker.setMap(null);
     tempMarker = new kakao.maps.Marker({ map: map, position: pos });
     map.panTo(pos);
-    var infoHtml = '<div style="padding:7px 10px;font-size:12px;max-width:220px"><b>'
-      + p.place_name + "</b>";
+    var infoHtml = "<b>" + p.place_name + "</b>";
     var infoSub = [(p.category_name || "").split(">").pop().trim(), p.phone]
       .filter(Boolean).join(" · ");
     if (infoSub) infoHtml += "<br>" + infoSub;
     if (p.place_url) {
       infoHtml += '<br><a href="#" data-u="' + p.place_url + '" data-n="'
         + String(p.place_name || "").replace(/["<>]/g, "") + '" '
-        + 'onclick="return openPlace(this.dataset.u, this.dataset.n)" '
-        + 'style="color:#3182f6;font-weight:700">상세보기 (사진·리뷰) →</a>';
+        + 'onclick="return openPlace(this.dataset.u, this.dataset.n)">'
+        + "상세보기 (사진·리뷰) →</a>";
     }
-    info.setContent(infoHtml + "</div>");
-    info.open(map, tempMarker);
+    openBubble(pos, infoHtml);
   }
   $("pl-search").addEventListener("click", doSearch);
   $("pl-q").addEventListener("keydown", function (e) {
@@ -4095,15 +4113,13 @@ PLACES_PAGE = """<div class="pl-studio">
         image: pinImage(p.status === "visited" ? "#f04452" : "#05a06d"),
       });
       kakao.maps.event.addListener(marker, "click", function () {
-        info.setContent('<div style="padding:7px 10px;font-size:12px;max-width:220px"><b>' + p.name + "</b>"
+        openBubble(marker.getPosition(), "<b>" + p.name + "</b>"
           + (p.status === "visited" ? "<br>" + stars(p.rating)
              + (p.menu ? "<br>" + p.menu : "") : "<br>가보고 싶은 곳")
           + (p.place_url ? '<br><a href="#" data-u="' + p.place_url + '" data-n="'
              + String(p.name || "").replace(/["<>]/g, "") + '" '
-             + 'onclick="return openPlace(this.dataset.u, this.dataset.n)" '
-             + 'style="color:#3182f6;font-weight:700">상세보기 (사진·리뷰) →</a>' : "")
-          + "</div>");
-        info.open(map, marker);
+             + 'onclick="return openPlace(this.dataset.u, this.dataset.n)">'
+             + "상세보기 (사진·리뷰) →</a>" : ""));
       });
       myMarkers.push(marker);
     });
