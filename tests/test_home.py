@@ -114,6 +114,16 @@ class RoutingTest(unittest.TestCase):
                        "viewer-canvas", "zoom-btn", "file-list"):
             self.assertIn(marker, r.text, marker)
 
+    def test_image_page_renders(self):
+        r = self.client.get("/image", cookies=self.admin_cookie)
+        self.assertEqual(r.status_code, 200)
+        for marker in ("img-drop", "up-run", "cv-run", "esrgan-slim",
+                       "tensorflow", "업스케일"):
+            self.assertIn(marker, r.text, marker)
+        r2 = self.client.get("/image", cookies=self.user_cookie,
+                             follow_redirects=False)
+        self.assertEqual(r2.status_code, 302)
+
     def test_admin_dashboard_renders(self):
         today_done = datetime.now(KST).replace(hour=10).isoformat()
         with patch.object(todos, "enabled", return_value=True), \

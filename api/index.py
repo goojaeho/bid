@@ -2946,6 +2946,254 @@ def pdf_page(request: Request):
                   PDF_PAGE, user=user, admin=True)
 
 
+# ------------------------------------------------- 이미지 도구 (AI 업스케일·변환)
+
+IMAGE_PAGE = """<div class="img-studio">
+  <div class="img-main">
+    <div id="img-drop">
+      <p style="margin:0 0 6px;font-weight:800;font-size:1.05rem">이미지를 여기로 끌어다 놓으세요</p>
+      <p class="meta" style="margin:0">또는 클릭해서 선택 (JPG·PNG·WebP) · 파일은 서버로 전송되지 않습니다</p>
+    </div>
+    <div id="img-view" hidden>
+      <div class="img-box"><span class="img-tag">원본</span><img id="img-orig"></div>
+      <div class="img-box" id="img-result-box" hidden>
+        <span class="img-tag" id="img-result-tag">결과</span><img id="img-result">
+      </div>
+    </div>
+  </div>
+  <aside class="img-panel">
+    <input type="file" id="img-file" accept="image/png,image/jpeg,image/webp" style="display:none">
+    <button type="button" id="img-pick" style="width:100%">이미지 선택</button>
+    <div id="img-info" class="meta" style="margin:0"></div>
+    <div id="img-tools" hidden>
+      <div class="panel-h">AI 업스케일 (선명하게 확대)</div>
+      <select id="up-scale" class="tool-sel">
+        <option value="2">2배 확대</option>
+        <option value="4">4배 확대</option>
+      </select>
+      <button type="button" id="up-run" class="tool-btn tool-primary">업스케일 실행</button>
+      <p class="meta" style="margin:2px 0 0">첫 사용 시 AI 모델(약 1MB)을 한 번 내려받습니다.
+      큰 이미지는 수십 초 걸릴 수 있어요 — 탭을 닫지 마세요.</p>
+      <div class="panel-h">변환 · 용량 줄이기</div>
+      <select id="cv-format" class="tool-sel">
+        <option value="image/jpeg">JPG로 변환</option>
+        <option value="image/webp">WebP로 변환 (용량 최소)</option>
+        <option value="image/png">PNG로 변환</option>
+      </select>
+      <label class="meta" style="margin:0">품질 <span id="cv-qv">85</span>%
+        <input type="range" id="cv-q" min="40" max="98" value="85" style="width:100%;padding:0;background:none;border:none">
+      </label>
+      <input type="number" id="cv-max" class="tool-sel" placeholder="최대 크기 px (선택, 예: 1920)" min="100">
+      <button type="button" id="cv-run" class="tool-btn">변환하기</button>
+    </div>
+    <div id="img-status"></div>
+    <div id="img-out"></div>
+  </aside>
+</div>
+<style>
+  .img-studio { display: flex; gap: 16px; align-items: flex-start; }
+  .img-main { flex: 1; min-width: 0; }
+  .img-panel { width: 252px; flex-shrink: 0; background: var(--card);
+               border-radius: var(--r-lg); box-shadow: var(--shadow); padding: 16px;
+               position: sticky; top: 16px; display: flex; flex-direction: column; gap: 8px; }
+  #img-drop { border: 2px dashed var(--line); border-radius: var(--r-lg);
+              padding: 84px 20px; text-align: center; cursor: pointer;
+              background: var(--card); transition: border-color 0.12s, background 0.12s; }
+  #img-drop:hover { border-color: var(--accent); }
+  #img-drop[hidden] { display: none; }
+  body.dragging #img-drop { display: block !important; border-color: var(--accent);
+                            background: var(--accent-soft); margin-bottom: 14px; }
+  #img-view { display: flex; flex-direction: column; gap: 14px; }
+  .img-box { background: var(--card); border-radius: var(--r-lg); box-shadow: var(--shadow);
+             padding: 12px; position: relative; overflow: auto; }
+  .img-box img { max-width: 100%; display: block; border-radius: 8px; }
+  .img-tag { position: absolute; top: 20px; left: 20px; background: rgba(25,31,40,0.65);
+             color: #fff; font-size: 0.72rem; font-weight: 700; border-radius: 6px;
+             padding: 2px 8px; z-index: 2; }
+  @media (max-width: 900px) {
+    .img-studio { flex-direction: column-reverse; }
+    .img-panel { width: auto; position: static; }
+  }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/upscaler@1.0.0/dist/browser/umd/upscaler.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@upscalerjs/esrgan-slim@1.0.0/dist/umd/models/esrgan-slim/src/x2/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@upscalerjs/esrgan-slim@1.0.0/dist/umd/models/esrgan-slim/src/x4/index.min.js"></script>
+<script>
+(function () {
+  var current = null;  // { file, img(HTMLImage), name }
+  var busy = false;
+
+  function $(id) { return document.getElementById(id); }
+  function mb(n) {
+    return n >= 1048576 ? (n / 1048576).toFixed(2) + " MB" : Math.round(n / 1024) + " KB";
+  }
+  function setStatus(msg, isError) {
+    $("img-status").innerHTML = msg
+      ? '<p class="' + (isError ? "error" : "meta") + '" style="margin:6px 0 0">' + msg + "</p>" : "";
+  }
+  function showOut(blobOrUrl, filename, label) {
+    var url = typeof blobOrUrl === "string" ? blobOrUrl : URL.createObjectURL(blobOrUrl);
+    $("img-out").innerHTML = '<div class="ai-sum" style="margin-top:8px;padding:10px 12px">'
+      + "<div>" + label + "</div>"
+      + '<a class="btn-outline dl" style="display:inline-block;margin-top:8px;padding:7px 16px">내려받기</a></div>';
+    var a = $("img-out").querySelector("a.dl");
+    a.href = url;
+    a.download = filename;
+    var r = $("img-result");
+    r.src = url;
+    $("img-result-box").hidden = false;
+  }
+
+  function loadFile(file) {
+    if (!file) return;
+    if (!/^image\\/(png|jpeg|webp)$/.test(file.type)) {
+      setStatus("JPG·PNG·WebP 이미지만 지원합니다.", true);
+      return;
+    }
+    var img = new Image();
+    img.onload = function () {
+      current = { file: file, img: img, name: file.name.replace(/\\.[a-z]+$/i, "") };
+      $("img-orig").src = img.src;
+      $("img-drop").hidden = true;
+      $("img-view").hidden = false;
+      $("img-tools").hidden = false;
+      $("img-result-box").hidden = true;
+      $("img-out").innerHTML = "";
+      setStatus("");
+      $("img-info").textContent = file.name + " · " + img.naturalWidth + "×"
+        + img.naturalHeight + " · " + mb(file.size);
+    };
+    img.onerror = function () { setStatus("이미지를 읽지 못했습니다.", true); };
+    img.src = URL.createObjectURL(file);
+  }
+
+  $("img-pick").addEventListener("click", function () { $("img-file").click(); });
+  $("img-drop").addEventListener("click", function () { $("img-file").click(); });
+  $("img-file").addEventListener("change", function () {
+    loadFile(this.files && this.files[0]);
+    this.value = "";
+  });
+
+  function hasFiles(e) {
+    return e.dataTransfer
+      && Array.prototype.indexOf.call(e.dataTransfer.types, "Files") !== -1;
+  }
+  var dragDepth = 0;
+  document.addEventListener("dragenter", function (e) {
+    if (!hasFiles(e)) return;
+    dragDepth++;
+    document.body.classList.add("dragging");
+  });
+  document.addEventListener("dragleave", function (e) {
+    if (!hasFiles(e)) return;
+    dragDepth--;
+    if (dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("dragging"); }
+  });
+  document.addEventListener("dragover", function (e) { if (hasFiles(e)) e.preventDefault(); });
+  document.addEventListener("drop", function (e) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    document.body.classList.remove("dragging");
+    loadFile(e.dataTransfer.files && e.dataTransfer.files[0]);
+  });
+
+  // ---------- AI 업스케일
+  var upscalers = {};
+  $("up-run").addEventListener("click", function () {
+    if (!current || busy) return;
+    if (!window.Upscaler || !window.tf) {
+      setStatus("AI 엔진을 불러오지 못했습니다. 새로고침 후 다시 시도해주세요.", true);
+      return;
+    }
+    var scale = $("up-scale").value;
+    var model = scale === "4" ? window.ESRGANSlim4x : window.ESRGANSlim2x;
+    busy = true;
+    $("up-run").disabled = true;
+    setStatus("AI 모델 준비 중…");
+    var start = Date.now();
+    try {
+      if (!upscalers[scale]) upscalers[scale] = new Upscaler({ model: model });
+      upscalers[scale].upscale(current.img, {
+        patchSize: 64,
+        padding: 2,
+        progress: function (p) {
+          setStatus("업스케일 중… " + Math.round(p * 100) + "% · "
+            + Math.round((Date.now() - start) / 1000) + "초");
+        },
+      }).then(function (src) {
+        busy = false;
+        $("up-run").disabled = false;
+        setStatus("");
+        $("img-result-tag").textContent = scale + "배 업스케일";
+        showOut(src, current.name + "_x" + scale + ".png",
+          "<b>" + (current.img.naturalWidth * scale) + "×"
+          + (current.img.naturalHeight * scale) + "</b> 업스케일 완료 ("
+          + Math.round((Date.now() - start) / 1000) + "초)");
+      }).catch(function (err) {
+        busy = false;
+        $("up-run").disabled = false;
+        setStatus("업스케일 실패: " + err, true);
+      });
+    } catch (err) {
+      busy = false;
+      $("up-run").disabled = false;
+      setStatus("업스케일 실패: " + err, true);
+    }
+  });
+
+  // ---------- 변환·용량 줄이기
+  $("cv-q").addEventListener("input", function () { $("cv-qv").textContent = this.value; });
+  $("cv-run").addEventListener("click", function () {
+    if (!current || busy) return;
+    var format = $("cv-format").value;
+    var q = (+$("cv-q").value) / 100;
+    var maxPx = parseInt($("cv-max").value, 10) || 0;
+    var img = current.img;
+    var w = img.naturalWidth, h = img.naturalHeight;
+    if (maxPx && Math.max(w, h) > maxPx) {
+      var ratio = maxPx / Math.max(w, h);
+      w = Math.round(w * ratio);
+      h = Math.round(h * ratio);
+    }
+    var canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    var ctx = canvas.getContext("2d");
+    if (format === "image/jpeg") {  // JPG는 투명 배경이 검게 되므로 흰색으로
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, w, h);
+    }
+    ctx.drawImage(img, 0, 0, w, h);
+    canvas.toBlob(function (blob) {
+      if (!blob) { setStatus("변환 실패", true); return; }
+      var ext = { "image/jpeg": "jpg", "image/webp": "webp", "image/png": "png" }[format];
+      var saved = 100 * (1 - blob.size / current.file.size);
+      $("img-result-tag").textContent = ext.toUpperCase() + " 변환";
+      showOut(blob, current.name + "." + ext,
+        "<b>" + mb(current.file.size) + "</b> → <b>" + mb(blob.size) + "</b>"
+        + (saved > 0 ? " (" + saved.toFixed(0) + "% 절감)" : "")
+        + "<br>" + w + "×" + h);
+      setStatus("");
+    }, format, q);
+  });
+})();
+</script>"""
+
+
+@app.get("/image", response_class=HTMLResponse)
+def image_page(request: Request):
+    redirect = gate(request)
+    if redirect:
+        return redirect
+    user = user_of(request)
+    if not auth.is_admin(user):
+        return RedirectResponse("/bid", status_code=302)
+    return layout("이미지 도구", icon("image", 20) + " 이미지 도구", "/image",
+                  IMAGE_PAGE, user=user, admin=True)
+
+
 # ------------------------------------------------- 회의록 (녹음 → 자동 회의록)
 
 MEETING_PAGE = """<div id="mt-setup">
