@@ -3788,6 +3788,10 @@ PLACES_PAGE = """<div class="pl-studio">
       <input type="text" id="pl-q" placeholder="가게 이름·지역으로 검색" style="flex:1;min-width:0">
       <button type="button" id="pl-search">검색</button>
     </div>
+    <div class="row" style="gap:6px;margin-top:0">
+      <button type="button" class="pl-cat chip chip-save" data-code="FD6">주변 밥집·맛집</button>
+      <button type="button" class="pl-cat chip chip-save" data-code="CE7">주변 카페</button>
+    </div>
     <div id="pl-results"></div>
     <div class="seg" id="pl-tabs" style="width:100%;justify-content:stretch">
       <a href="#" data-tab="wish" class="on" style="flex:1;text-align:center">가고싶은 곳</a>
@@ -3901,20 +3905,22 @@ PLACES_PAGE = """<div class="pl-studio">
   });
   document.getElementById("pl-loc").addEventListener("click", function () { locate(true); });
 
-  // ---------- 검색
-  function doSearch() {
-    var q = $("pl-q").value.trim();
-    if (!q || !ps) return;
-    var opts = myPos ? { location: myPos } : {};
-    ps.keywordSearch(q, function (data, status) {
-      var box = $("pl-results");
-      box.innerHTML = "";
-      box.classList.add("show");
-      if (status !== kakao.maps.services.Status.OK || !data.length) {
-        box.appendChild(el("div", "meta", "검색 결과가 없습니다."));
-        return;
-      }
-      data.slice(0, 8).forEach(function (p) {
+  // ---------- 검색 (키워드·주변 카테고리 공용)
+  var resMarkers = [];
+  function clearResMarkers() {
+    resMarkers.forEach(function (m) { m.setMap(null); });
+    resMarkers = [];
+  }
+  function renderResults(data, status) {
+    var box = $("pl-results");
+    box.innerHTML = "";
+    box.classList.add("show");
+    clearResMarkers();
+    if (status !== kakao.maps.services.Status.OK || !data.length) {
+      box.appendChild(el("div", "meta", "검색 결과가 없습니다."));
+      return;
+    }
+    data.slice(0, 15).forEach(function (p) {
         var row = el("div", "pl-res");
         var save = el("button", "", "저장");
         save.type = "button";
@@ -3937,12 +3943,31 @@ PLACES_PAGE = """<div class="pl-studio">
         row.appendChild(save);
         row.appendChild(el("b", "", p.place_name));
         row.appendChild(el("span", "", (p.road_address_name || p.address_name || "")));
-        row.addEventListener("click", function () { showTemp(p); });
-        box.appendChild(row);
+      row.addEventListener("click", function () { showTemp(p); });
+      box.appendChild(row);
+      var mk = new kakao.maps.Marker({
+        map: map, position: new kakao.maps.LatLng(p.y, p.x), opacity: 0.85,
       });
-      showTemp(data[0]);
-    }, opts);
+      kakao.maps.event.addListener(mk, "click", function () { showTemp(p); });
+      resMarkers.push(mk);
+    });
+    showTemp(data[0]);
   }
+  function doSearch() {
+    var q = $("pl-q").value.trim();
+    if (!q || !ps) return;
+    var opts = myPos ? { location: myPos } : {};
+    ps.keywordSearch(q, renderResults, opts);
+  }
+  document.querySelectorAll(".pl-cat").forEach(function (b) {
+    b.addEventListener("click", function () {
+      if (!ps || !map) return;
+      ps.categorySearch(b.dataset.code, renderResults, {
+        location: map.getCenter(), radius: 1000,
+        sort: kakao.maps.services.SortBy.DISTANCE,
+      });
+    });
+  });
   function showTemp(p) {
     var pos = new kakao.maps.LatLng(p.y, p.x);
     if (tempMarker) tempMarker.setMap(null);
