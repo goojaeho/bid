@@ -3779,8 +3779,9 @@ PLACES_SETUP_CARD = """<div class="card"><p class="error" style="margin:0 0 8px"
 3. Vercel 환경변수 <b>KAKAO_JS_KEY</b>에 붙여넣고 Redeploy</p></div>"""
 
 PLACES_PAGE = """<div class="pl-studio">
-  <div class="pl-main">
+  <div class="pl-main" style="position:relative">
     <div id="pl-map"></div>
+    <button type="button" id="pl-loc" title="내 위치로 이동">◎ 내 위치</button>
   </div>
   <aside class="pl-panel">
     <div class="row" style="gap:6px">
@@ -3800,6 +3801,11 @@ PLACES_PAGE = """<div class="pl-studio">
   .pl-main { flex: 1; min-width: 0; }
   #pl-map { width: 100%; height: calc(100vh - 170px); min-height: 480px;
             border-radius: var(--r-lg); background: var(--fill); box-shadow: var(--shadow); }
+  #pl-loc { position: absolute; top: 12px; right: 12px; z-index: 5;
+            background: var(--card); color: var(--sub); border: none;
+            border-radius: 10px; padding: 8px 13px; font-size: 0.82rem; font-weight: 700;
+            box-shadow: 0 2px 8px rgba(25,31,40,0.18); cursor: pointer; }
+  #pl-loc:hover { color: var(--accent); background: var(--card); }
   .pl-panel { width: 300px; flex-shrink: 0; background: var(--card);
               border-radius: var(--r-lg); box-shadow: var(--shadow); padding: 14px;
               display: flex; flex-direction: column; gap: 10px;
@@ -3863,18 +3869,43 @@ PLACES_PAGE = """<div class="pl-studio">
     return;
   }
 
+  var myPos = null, myDot = null;
+  function locate(pan) {
+    if (!navigator.geolocation || !map) return;
+    navigator.geolocation.getCurrentPosition(function (pos) {
+      myPos = new kakao.maps.LatLng(pos.coords.latitude, pos.coords.longitude);
+      if (!myDot) {
+        myDot = new kakao.maps.CustomOverlay({
+          position: myPos, zIndex: 3,
+          content: '<div style="width:14px;height:14px;border-radius:50%;' +
+                   'background:#3182f6;border:3px solid #fff;' +
+                   'box-shadow:0 0 6px rgba(49,130,246,.6)"></div>',
+        });
+        myDot.setMap(map);
+      } else {
+        myDot.setPosition(myPos);
+      }
+      if (pan) { map.setLevel(5); map.panTo(myPos); }
+    }, function () {
+      if (pan) alert("위치 권한이 꺼져 있어 내 위치를 가져올 수 없습니다. 브라우저 주소창의 위치 권한을 허용해주세요.");
+    }, { enableHighAccuracy: true, timeout: 7000, maximumAge: 60000 });
+  }
+
   kakao.maps.load(function () {
     map = new kakao.maps.Map($("pl-map"),
-      { center: new kakao.maps.LatLng(35.8714, 128.6014), level: 5 });  // 대구 기준
+      { center: new kakao.maps.LatLng(35.8714, 128.6014), level: 5 });  // 기본: 대구
     ps = new kakao.maps.services.Places();
     info = new kakao.maps.InfoWindow({ zIndex: 2 });
     loadMine();
+    locate(true);  // 위치 허용 시 현재 위치로 이동
   });
+  document.getElementById("pl-loc").addEventListener("click", function () { locate(true); });
 
   // ---------- 검색
   function doSearch() {
     var q = $("pl-q").value.trim();
     if (!q || !ps) return;
+    var opts = myPos ? { location: myPos } : {};
     ps.keywordSearch(q, function (data, status) {
       var box = $("pl-results");
       box.innerHTML = "";
@@ -3910,7 +3941,7 @@ PLACES_PAGE = """<div class="pl-studio">
         box.appendChild(row);
       });
       showTemp(data[0]);
-    });
+    }, opts);
   }
   function showTemp(p) {
     var pos = new kakao.maps.LatLng(p.y, p.x);
