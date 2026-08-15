@@ -3797,6 +3797,11 @@ PLACES_PAGE = """<div class="pl-studio">
       <a href="#" data-tab="wish" class="on" style="flex:1;text-align:center">가고싶은 곳</a>
       <a href="#" data-tab="visited" style="flex:1;text-align:center">가봤던 곳</a>
     </div>
+    <select id="pl-sort" style="width:100%;font-size:0.82rem;padding:7px 10px">
+      <option value="latest">최신 저장순</option>
+      <option value="rating">별점 높은순</option>
+      <option value="name">이름순</option>
+    </select>
     <div class="meta" style="margin:0;font-size:0.74rem">
       지도 핀: <span style="color:#05a06d;font-weight:800">●</span> 가고싶은 곳 ·
       <span style="color:#f04452;font-weight:800">●</span> 가봤던 곳</div>
@@ -4108,6 +4113,16 @@ PLACES_PAGE = """<div class="pl-studio">
     var list = $("pl-list");
     list.innerHTML = "";
     var subset = items.filter(function (p) { return p.status === tab; });
+    var sort = $("pl-sort").value;
+    if (sort === "rating") {
+      subset = subset.slice().sort(function (a, b) {
+        return (b.rating || 0) - (a.rating || 0);
+      });
+    } else if (sort === "name") {
+      subset = subset.slice().sort(function (a, b) {
+        return String(a.name).localeCompare(String(b.name), "ko");
+      });
+    }
     if (!subset.length) {
       list.textContent = tab === "wish"
         ? "저장된 곳이 없습니다. 위에서 검색해 추가해보세요."
@@ -4211,6 +4226,7 @@ PLACES_PAGE = """<div class="pl-studio">
     return box;
   }
 
+  document.getElementById("pl-sort").addEventListener("change", renderList);
   document.getElementById("pl-tabs").addEventListener("click", function (e) {
     var a = e.target.closest("a[data-tab]");
     if (!a) return;
