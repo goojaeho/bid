@@ -3797,6 +3797,9 @@ PLACES_PAGE = """<div class="pl-studio">
       <a href="#" data-tab="wish" class="on" style="flex:1;text-align:center">가고싶은 곳</a>
       <a href="#" data-tab="visited" style="flex:1;text-align:center">가봤던 곳</a>
     </div>
+    <div class="meta" style="margin:0;font-size:0.74rem">
+      지도 핀: <span style="color:#05a06d;font-weight:800">●</span> 가고싶은 곳 ·
+      <span style="color:#f04452;font-weight:800">●</span> 가봤던 곳</div>
     <div id="pl-list" class="meta">불러오는 중…</div>
   </aside>
 </div>
@@ -4063,6 +4066,19 @@ PLACES_PAGE = """<div class="pl-studio">
     }).catch(function () {});
   }
 
+  var pinCache = {};
+  function pinImage(color) {
+    if (pinCache[color]) return pinCache[color];
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="40" viewBox="0 0 30 40">'
+      + '<path d="M15 0C6.7 0 0 6.7 0 15c0 10.5 15 25 15 25s15-14.5 15-25C30 6.7 23.3 0 15 0z" fill="'
+      + color + '" stroke="#fff" stroke-width="1.5"/>'
+      + '<circle cx="15" cy="15" r="5.5" fill="#fff"/></svg>';
+    pinCache[color] = new kakao.maps.MarkerImage(
+      "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg),
+      new kakao.maps.Size(30, 40), { offset: new kakao.maps.Point(15, 40) });
+    return pinCache[color];
+  }
+
   function renderMarkers() {
     myMarkers.forEach(function (m) { m.setMap(null); });
     myMarkers = [];
@@ -4071,7 +4087,7 @@ PLACES_PAGE = """<div class="pl-studio">
       if (!p.lat || !p.lng) return;
       var marker = new kakao.maps.Marker({
         map: map, position: new kakao.maps.LatLng(p.lat, p.lng),
-        opacity: p.status === "visited" ? 1 : 0.55,
+        image: pinImage(p.status === "visited" ? "#f04452" : "#05a06d"),
       });
       kakao.maps.event.addListener(marker, "click", function () {
         info.setContent('<div style="padding:7px 10px;font-size:12px;max-width:220px"><b>' + p.name + "</b>"
