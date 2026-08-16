@@ -3004,6 +3004,7 @@ IMAGE_PAGE = """<div class="img-studio">
   body.dragging #img-drop { display: block !important; border-color: var(--accent);
                             background: var(--accent-soft); margin-bottom: 14px; }
   #img-view { display: flex; flex-direction: column; gap: 14px; }
+  #img-view[hidden] { display: none; }
   .img-box { background: var(--card); border-radius: var(--r-lg); box-shadow: var(--shadow);
              padding: 12px; position: relative; overflow: auto; }
   .img-box img { max-width: 100%; display: block; border-radius: 8px; }
