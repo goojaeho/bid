@@ -2,12 +2,22 @@ let micPromise=null;
 let recorder=null,micStream=null,recordTimer=null,recordStarting=false,cancelRecording=false;
 let context=null,analyser=null,processor=null,source=null,silentGain=null,animation=null;
 let wakeProcessing=false,wakeParts=[],preRoll=[],speechStart=0,lastLoud=0,commandAuto=false,commandSpoke=false,commandStarted=0,lastCommandLoud=0;
-function recordingControls(){ $('dictate').textContent=transcribing?'글로 바꾸는 중…':recording?'■ 녹음 끝내기':'마이크';$('dictate').disabled=transcribing||recordStarting;$('send').disabled=recording||transcribing;$('brief').disabled=recording||transcribing; }
+function recordingControls(){ $('dictate').textContent=transcribing?'글로 바꾸는 중…':recording?'■ 녹음 끝내기':'마이크';$('dictate').disabled=transcribing||recordStarting;$('send').disabled=recording||transcribing;$('brief').disabled=recording||transcribing;$('record-cancel').disabled=!recording&&!recordStarting;$('record-stop').disabled=!recording; }
 function resetWake(){wakeParts=[];preRoll=[];speechStart=0;lastLoud=0;}
-function drawWave(){
- const canvas=$('waveform'),g=canvas.getContext('2d');g.clearRect(0,0,canvas.width,canvas.height);
- const values=new Uint8Array(analyser.fftSize);analyser.getByteTimeDomainData(values);g.lineWidth=2;g.strokeStyle=recording?'#c4a9ff':'#adb5ca';g.beginPath();
- for(let i=0;i<values.length;i++){const x=i/(values.length-1)*canvas.width,y=(values[i]-128)*0.9+canvas.height/2;i?g.lineTo(x,y):g.moveTo(x,y);}g.stroke();animation=requestAnimationFrame(drawWave);
+let waveHistory=[],waveTick=0;
+function paintWave(level=0,advance=false){
+ const canvas=$('waveform'),width=canvas.clientWidth,height=32,ratio=window.devicePixelRatio||1;
+ if(width<1)return;
+ if(canvas.width!==Math.round(width*ratio)||canvas.height!==Math.round(height*ratio)){canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio);}
+ const count=Math.max(1,Math.floor(width/6));while(waveHistory.length<count)waveHistory.unshift(0);if(waveHistory.length>count)waveHistory=waveHistory.slice(-count);
+ if(advance){waveHistory.shift();waveHistory.push(level);}
+ const g=canvas.getContext('2d');g.setTransform(ratio,0,0,ratio,0,0);g.clearRect(0,0,width,height);g.lineCap='round';g.lineWidth=2.6;
+ for(let i=0;i<count;i++){const amplitude=waveHistory[i],bar=Math.max(0,Math.min(22,amplitude*22)),x=(width-(count-1)*6)/2+i*6;g.strokeStyle=bar>2?'#909398':'#d1d3d6';g.beginPath();g.moveTo(x,height/2-bar/2);g.lineTo(x,height/2+bar/2+0.01);g.stroke();}
+}
+function drawWave(now=0){
+ const values=new Float32Array(analyser.fftSize);analyser.getFloatTimeDomainData(values);let energy=0;for(const value of values)energy+=value*value;
+ if(now-waveTick>=50){paintWave(Math.min(1,Math.sqrt(energy/values.length)*9),true);waveTick=now;}
+ animation=requestAnimationFrame(drawWave);
 }
 async function ensureMic(){if(micStream)return;if(micPromise)return micPromise;micPromise=openMic();try{await micPromise;}finally{micPromise=null;}}
 async function openMic(){
@@ -26,7 +36,7 @@ async function openMic(){
  };
  $('mic-state').textContent=state.wakeEnabled?'마이크 켜짐 · 자비스 호출 대기':'마이크 켜짐 · 녹음';drawWave();
 }
-function closeMic(){clearTimeout(recordTimer);if(animation)cancelAnimationFrame(animation);if(processor)processor.disconnect();if(source)source.disconnect();if(silentGain)silentGain.disconnect();if(micStream)micStream.getTracks().forEach(t=>t.stop());if(context)context.close();micStream=null;context=null;processor=null;resetWake();$('mic-state').textContent='마이크 꺼짐';const c=$('waveform');c.getContext('2d').clearRect(0,0,c.width,c.height);}
+function closeMic(){clearTimeout(recordTimer);if(animation)cancelAnimationFrame(animation);if(processor)processor.disconnect();if(source)source.disconnect();if(silentGain)silentGain.disconnect();if(micStream)micStream.getTracks().forEach(t=>t.stop());if(context)context.close();micStream=null;context=null;processor=null;resetWake();$('mic-state').textContent='마이크 꺼짐';waveHistory=[];paintWave();}
 async function syncWake(){ $('wake').checked=!!state.wakeEnabled;if(state.wakeEnabled){try{await ensureMic();if(!state.wakeEnabled&&!recording&&!recordStarting){closeMic();return;}$('mic-state').textContent='마이크 켜짐 · 자비스 호출 대기';}catch{$('mic-state').textContent='마이크 연결 필요';$('status').textContent='마이크 권한을 확인한 뒤 호출 듣기를 다시 켜주세요.';}}else if(!recording&&!recordStarting)closeMic(); }
 async function detectWake(parts,rate){wakeProcessing=true;try{
  const result=await window.jarvis.transcribe(VoiceUtils.wav(parts,rate),'wake');if(!state.wakeEnabled||recording||busy)return;
@@ -66,3 +76,8 @@ $('wake').onchange=async()=>{update(await window.jarvis.wake($('wake').checked))
 window.jarvis.onState(()=>syncWake());window.jarvis.state().then(value=>{update(value);syncWake();});
 window.jarvis.onStopRecording(()=>{if(recording||recordStarting)finishRecording(true);if(!state.wakeEnabled)closeMic();});
 window.addEventListener('beforeunload',()=>{finishRecording(true);closeMic();});
+
+$('record-cancel').onclick=()=>finishRecording(true);
+$('record-stop').onclick=()=>finishRecording();
+window.addEventListener('resize',()=>paintWave());
+recordingControls();paintWave();
