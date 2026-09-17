@@ -1,13 +1,13 @@
 {
   "name": "jarvis-desktop",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "description": "Personal Jarvis desktop companion",
   "author": "Jarvis project",
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
-    "test": "node --test tests.cjs account-test.cjs assistant-test.cjs",
+    "test": "node --test tests.cjs account-test.cjs assistant-test.cjs services-test.cjs",
     "pack": "electron-builder --win dir"
   },
   "devDependencies": {
@@ -30,7 +30,9 @@
       "recorder.js",
       "assets/*",
       "voice-utils.js",
-      "assistant.cjs"
+      "assistant.cjs",
+      "records.cjs",
+      "services.js"
     ],
     "win": {
       "signAndEditExecutable": false

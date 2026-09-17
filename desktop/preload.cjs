@@ -1,5 +1,15 @@
 const {contextBridge,ipcRenderer}=require('electron');
 contextBridge.exposeInMainWorld('jarvis',{
+  mailRefresh:()=>ipcRenderer.invoke('mail-refresh'),
+  mailAck:ids=>ipcRenderer.invoke('mail-ack',ids),
+  mailAction:(action,id)=>ipcRenderer.invoke('mail-action',action,id),
+  onMail:callback=>ipcRenderer.on('mail-feed',(_e,value)=>callback(value)),
+  calendarList:()=>ipcRenderer.invoke('calendar-list'),
+  calendarPreview:(schedule,id)=>ipcRenderer.invoke('calendar-preview',schedule,id),
+  approve:id=>ipcRenderer.invoke('proposal-approve',id),
+  search:query=>ipcRenderer.invoke('records-search',query),
+  openLink:url=>ipcRenderer.invoke('open-link',url),
+  googleConnect:()=>ipcRenderer.invoke('google-connect'),
   wake:value=>ipcRenderer.invoke('wake',value),
   show:()=>ipcRenderer.invoke('show'),
   transcribe:(bytes,mode)=>ipcRenderer.invoke('transcribe',bytes,mode),

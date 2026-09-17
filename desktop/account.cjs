@@ -46,5 +46,10 @@ class Account {
   try{const {status,data}=await this.post('/api/desktop/command',{text},this.token);if(status===401)this.logout();return data;}
   catch{return {ok:false,message:'서버 응답을 확인하지 못했어요. 중복 등록을 피하려면 기존 사이트에서 등록 여부를 확인해주세요.'};}
  }
+ async service(op,payload={}){
+  if(!this.token)return {ok:false,message:'먼저 Google로 로그인해주세요.'};
+  const {status,data}=await this.post('/api/desktop/service',{...payload,op},this.token);
+  if(status===401)this.logout();return data;
+ }
 }
 module.exports={Account};

@@ -1,7 +1,7 @@
 const $=id=>document.getElementById(id);
 let state={},busy=false,audio=null,generation=0,recording=false,transcribing=false,playbackResolve=null;
 function stop(){generation++;if(playbackResolve){playbackResolve();playbackResolve=null;}speechSynthesis.cancel();if(audio){audio.pause();URL.revokeObjectURL(audio.src);audio=null;}}
-function update(value){const wasPaused=state.paused;if(state.connected!==value.connected)document.querySelector('details').open=!value.connected;state=value;$('connection').textContent=value.connected?'로그인됨':'로그인 필요';$('pause').textContent=value.paused?'안내 재개':'안내 멈춤';if(value.paused&&!wasPaused)stop();}
+function update(value){const wasPaused=state.paused;if(state.connected!==value.connected)document.querySelector('#account-settings').open=!value.connected;state=value;$('connection').textContent=value.connected?'로그인됨':'로그인 필요';$('pause').textContent=value.paused?'안내 재개':'안내 멈춤';if(value.paused&&!wasPaused)stop();}
 function message(text,role){const node=document.createElement('article');node.className=role;node.textContent=text;$('conversation').append(node);node.scrollIntoView();}
 function speechChunks(text){const chunks=[];for(const sentence of text.split(/(?<=[.!?])\s+/)){let rest=sentence;while(rest.length>400){chunks.push(rest.slice(0,400));rest=rest.slice(400);}if(rest)chunks.push(rest);}return chunks;}
 async function speak(text){
@@ -27,7 +27,7 @@ async function speak(text){
  if(current!==generation||state.paused)return;
  const utterance=new SpeechSynthesisUtterance(text);utterance.lang='ko-KR';const voices=speechSynthesis.getVoices().filter(v=>v.lang.toLowerCase().startsWith('ko'));utterance.voice=voices.find(v=>/Heami|SunHi|female/i.test(v.name))||voices[0]||null;utterance.rate=1;await new Promise(resolve=>{playbackResolve=resolve;utterance.onend=resolve;utterance.onerror=resolve;speechSynthesis.speak(utterance);});playbackResolve=null;
 }
-async function send(text){if(busy||recording||transcribing||!text.trim())return;busy=true;$('send').disabled=true;message(text,'user');$('input').value='';$('status').textContent='처리 중이에요…';try{const result=await window.jarvis.command(text);message(result.message,'assistant');$('status').textContent=result.ok?'완료했어요.':'내용을 확인해주세요.';await speak(result.message);}catch{message('처리 결과를 확인하지 못했어요. 기존 사이트에서 등록 여부를 확인해주세요.','assistant');}finally{busy=false;$('send').disabled=false;}}
+async function send(text){if(busy||recording||transcribing||!text.trim())return;busy=true;$('send').disabled=true;message(text,'user');$('input').value='';$('status').textContent='처리 중이에요…';try{const result=await window.jarvis.command(text);if(typeof showResult==='function')showResult(result);else message(result.message,'assistant');$('status').textContent=result.ok?'완료했어요.':'내용을 확인해주세요.';await speak(result.message);}catch{message('처리 결과를 확인하지 못했어요. 기존 사이트에서 등록 여부를 확인해주세요.','assistant');}finally{busy=false;$('send').disabled=false;}}
 $('form').onsubmit=e=>{e.preventDefault();send($('input').value);};$('brief').onclick=()=>send('브리핑해봐');
 $('pause').onclick=()=>window.jarvis.pause(!state.paused);
 $('site').onclick=()=>window.jarvis.site();

@@ -1,0 +1,26 @@
+const {_electron}=require('@playwright/test');const path=require('node:path'),assert=require('node:assert/strict');
+(async()=>{const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;const a=await _electron.launch({executablePath:path.join(process.env.LOCALAPPDATA,'JarvisBuild/v0.5.0/win-unpacked/Jarvis.exe'),args:['--use-fake-device-for-media-stream'],env});
+try{const p=await a.firstWindow();await p.waitForSelector('#mail-refresh',{state:'attached'});await p.evaluate(async()=>{await window.jarvis.wake(false);await window.jarvis.pause(true);});
+ const errors=[];p.on('pageerror',e=>errors.push(e.message));
+ const found=await p.evaluate(()=>window.jarvis.search(''));
+ console.log(JSON.stringify({records:found.total,errors:found.errors,sources:[...new Set(found.items.map(x=>x.source))]}));assert.equal(found.errors.length,0);assert.ok(found.total>0);assert.ok(found.items.every(x=>['mail','meetings'].includes(x.source)));
+ const feed=await p.evaluate(()=>window.jarvis.mailRefresh());assert.equal(feed.error,'');console.log('MAIL_ITEMS',feed.items.length);
+ const read=await p.evaluate(id=>window.jarvis.mailAction('read',id),feed.items[0].id);assert.equal(read.ok,true);console.log('LIVE_MAIL_BODY_READ',Boolean(read.item.body));
+ const calendar=await p.evaluate(()=>window.jarvis.calendarList());assert.equal(calendar.ok,true);assert.ok(calendar.events.length>0);console.log('LIVE_CALENDAR_LIST',calendar.events.length);
+ await p.getByText('메일 · 캘린더 · 기록 검색',{exact:true}).click();await p.click('#record-search');await p.waitForFunction(()=>document.getElementById('record-results').textContent.includes('저장 기록'));
+ await p.fill('#event-title','검증용 미저장 제안');await p.fill('#event-date','2036-02-03');await p.fill('#event-time','03:14');await p.click('#event-preview');await p.waitForFunction(()=>document.querySelector('#conversation').textContent.includes('캘린더에 반영할까요?'),{},{timeout:30000});
+ console.log('UI_PREVIEW_OK_NO_WRITE');
+ await p.evaluate(()=>window.jarvis.command('아니요'));
+ const started=Date.now();const response=await p.evaluate(()=>window.jarvis.command('내일 오후 3시에 30분 동안 테스트 회의 잡아줘'));
+ console.log(JSON.stringify({modelScheduleSeconds:(Date.now()-started)/1000,kind:response.kind,ok:response.ok,conflicts:response.conflicts?.length,message:response.message}));
+ assert.ok(response.kind==='calendar-proposal'||response.conflicts?.length);
+ await p.evaluate(()=>window.jarvis.command('아니요'));
+ // Keep notification test synthetic: do not send any real email.
+ await p.evaluate(()=>updateMail({items:[],pending:[{id:999999999,subject:'합성 알림 시험',sender:'시험',summary:'대기 요약'}],error:''}));
+ assert.ok(await p.locator('#mail-status').textContent().then(t=>t.includes('안내 대기 1개')));
+ await p.evaluate(()=>{window.testSpoken=[];speak=async text=>{window.testSpoken.push(text);};});
+ await new Promise(r=>setTimeout(r,2300));assert.equal(await p.evaluate(()=>window.testSpoken.length),0);
+ await p.evaluate(()=>window.jarvis.pause(false));await p.waitForFunction(()=>window.testSpoken.some(x=>x.includes('합성 알림 시험')),{},{timeout:5000});
+ await p.evaluate(()=>window.jarvis.pause(true));
+ assert.deepEqual(errors,[]);console.log('PASS live records/mail, calendar proposal UI, EXAONE calendar intent, paused queue');
+}finally{await a.close();}})().catch(e=>{console.error(e);process.exitCode=1;});

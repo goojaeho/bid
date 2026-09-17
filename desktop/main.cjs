@@ -1,7 +1,8 @@
 const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell, safeStorage } = require('electron');
 const { Account } = require('./account.cjs');
 const { Speech } = require('./speech.cjs');
-const { Assistant } = require('./assistant.cjs');
+const { Assistant,todayKst,calendarLine } = require('./assistant.cjs');
+const { Records } = require('./records.cjs');
 const fs = require('node:fs');
 const {privateDecrypt,constants}=require('node:crypto');
 const path = require('node:path');
@@ -64,7 +65,9 @@ app.whenReady().then(()=>{
   tray=new Tray(icon);tray.setToolTip('자비스 — 클릭해서 열기');tray.on('click',show);menu();
   account=new Account({directory:app.getPath('userData'),crypto:safeStorage,open:url=>shell.openExternal(url),onChange:notice=>{emit();if(notice)win.webContents.send('notice',notice);else show();}});
   account.load();
-  const assistant=new Assistant({execute:text=>account.command(text),infer:async body=>{
+  const service=(op,payload)=>account.service(op,payload);
+  const records=new Records(service);
+  const assistant=new Assistant({execute:text=>account.command(text),service,records,infer:async body=>{
     if(!ttsToken||!ttsOrigin)throw Error('맥 대화 서버 연결 설정이 필요해요.');
     const url=new URL('/assistant',ttsOrigin);url.port='8766';
     let response;
@@ -77,6 +80,43 @@ app.whenReady().then(()=>{
     if(!response.ok)throw Error(response.status===429?'맥이 앞선 요청을 처리 중이에요. 잠시 뒤 말씀해주세요.':'맥 대화 서버에 연결하지 못했어요.');
     const data=await response.text();if(data.length>20000)throw Error('대화 응답이 너무 길어요.');return JSON.parse(data);
   }});
+  const mailFile=path.join(app.getPath('userData'),'mail-state.bin');
+  let mailState={seen:[],pending:[],initialized:false},mailItems=[],polling=false,mailCursor='',mailError='';
+  try{mailState=JSON.parse(safeStorage.decryptString(fs.readFileSync(mailFile)));}catch{}
+  if(!mailState.since)mailState.since=Date.now();
+  const persistMail=()=>fs.writeFileSync(mailFile,safeStorage.encryptString(JSON.stringify(mailState)));
+  const emitMail=()=>{if(!win.isDestroyed())win.webContents.send('mail-feed',{items:mailItems,pending:mailState.pending,error:mailError});};
+  async function pollMail(){
+    if(polling||!account.token)return;polling=true;
+    try{const r=await service('mail.poll',{cursor:mailCursor});if(!r.ok)throw Error(r.message);
+      mailCursor=r.next_cursor||'';mailError='';mailItems=r.items;
+      const known=new Set(mailState.seen);
+      if(mailState.initialized)for(const m of r.items)if(!known.has(m.id)&&m.category!=='promo'&&Date.parse(m.received_at)>=mailState.since)mailState.pending.push({id:m.id,subject:m.subject,summary:m.summary||m.snippet,sender:m.sender});
+      mailState.seen=[...new Set([...mailState.seen,...r.items.map(x=>x.id)])].slice(-10000);mailState.initialized=true;
+      persistMail();if(r.new)records.invalidate();
+    }catch(e){mailError=e.message;}finally{polling=false;emitMail();}
+  }
+  const pollTimer=setInterval(pollMail,60000);setTimeout(pollMail,8000);
+  app.on('before-quit',()=>clearInterval(pollTimer));
+  async function exclusive(job){if(pending)return {ok:false,message:'앞선 요청을 처리 중이에요.'};pending=true;try{return await job();}finally{pending=false;}}
+  const trashTokens=new Map();
+  ipcMain.handle('mail-refresh',async e=>{check(e);await pollMail();return {items:mailItems,pending:mailState.pending,error:mailError};});
+  ipcMain.handle('mail-ack',(e,ids)=>{check(e);if(!Array.isArray(ids))return;mailState.pending=mailState.pending.filter(x=>!ids.includes(x.id));persistMail();});
+  ipcMain.handle('mail-action',async(e,action,id)=>{
+    check(e);if(!Number.isSafeInteger(id)||id<1)throw Error('잘못된 메일');
+    if(action==='event-auto'&&assistant.proposal)return {ok:false,message:'먼저 진행 중인 제안을 확인해주세요.'};
+    if(action==='event'||action==='event-auto'){const r=await service('mail.detail',{id});if(!r.ok)return r;return exclusive(async()=>{const proposal=await assistant.mailEvent(r.item);if(proposal.schedule){const saved=await service('mail.analysis',{id,schedule:proposal.schedule});if(saved.ok)records.invalidate();}return proposal;});}
+    if(action==='read')return service('mail.detail',{id});
+    if(action==='trash-preview'){const r=await service('mail.trash.preview',{id});if(r.ok)trashTokens.set(id,r.token);return {ok:r.ok,message:r.ok?`‘${r.subject}’ 메일을 휴지통으로 옮길까요?`:r.message};}
+    if(action==='trash'){const token=trashTokens.get(id);if(!token)return {ok:false,message:'먼저 삭제할 메일을 확인해주세요.'};trashTokens.delete(id);const r=await service('mail.trash.commit',{token});if(r.ok){records.invalidate();await pollMail();}return r;}
+    throw Error('지원하지 않는 메일 작업');
+  });
+  ipcMain.handle('calendar-list',async e=>{check(e);const start=todayKst()+'T00:00:00+09:00';const end=new Date(Date.parse(start)+7*86400000).toISOString();const r=await service('calendar.list',{start,end});return {...r,events:r.items,message:r.ok?(r.items.length?r.items.map(calendarLine).join('\n'):'앞으로 7일간 일정이 없어요.'):r.message};});
+  ipcMain.handle('calendar-preview',(e,schedule,id)=>{check(e);return exclusive(()=>assistant.prepareEvent(schedule,id||''));});
+  ipcMain.handle('proposal-approve',(e,id)=>{check(e);if(typeof id!=='string')throw Error('승인할 제안을 확인해주세요.');return exclusive(()=>assistant.approve(id));});
+  ipcMain.handle('records-search',(e,query)=>{check(e);if(typeof query!=='string'||query.length>250)throw Error('검색어를 확인해주세요.');return records.search(query);});
+  ipcMain.handle('open-link',(e,value)=>{check(e);const u=new URL(value);if(u.protocol!=='https:'||!['www.oneaigen.com','calendar.google.com','www.google.com'].includes(u.hostname))throw Error('허용되지 않은 링크');return shell.openExternal(u.href);});
+  ipcMain.handle('google-connect',e=>{check(e);return shell.openExternal('https://www.oneaigen.com/gmail/connect');});
   const speechRoot=app.isPackaged?process.resourcesPath:__dirname;
   try { speech=new Speech(JSON.parse(fs.readFileSync(path.join(speechRoot,'speech-runtime.json'),'utf8')),path.join(speechRoot,'transcribe.py')); } catch {}
   ipcMain.handle('transcribe',async(e,bytes,mode)=>{check(e);if(!speech)return {error:'음성 인식 환경이 준비되지 않았어요.'};try{return await speech.transcribe(bytes,mode==='wake'?'wake':'command');}catch(error){return {error:error.message};}});
@@ -84,7 +124,7 @@ app.whenReady().then(()=>{
   ipcMain.handle('show', e=>{check(e);show();});
   ipcMain.handle('state',e=>{check(e);return state();});
   ipcMain.handle('login',async e=>{check(e);await account.login();return {ok:true};});
-  ipcMain.handle('logout',e=>{check(e);assistant.reset();account.logout();return state();});
+  ipcMain.handle('logout',e=>{check(e);assistant.reset();records.items=[];records.invalidate();account.logout();mailState={seen:[],pending:[],initialized:false,since:Date.now()};mailItems=[];persistMail();emitMail();return state();});
   ipcMain.handle('site',e=>{check(e);return shell.openExternal('https://www.oneaigen.com/jarvis');});
   ipcMain.handle('pause',(e,value)=>{check(e);paused=!!value;emit();menu();return state();});
   ipcMain.handle('settings',(e,value)=>{
@@ -96,7 +136,7 @@ app.whenReady().then(()=>{
   ipcMain.handle('command',async(e,text)=>{
     check(e);if(typeof text!=='string'||!text.trim()||text.length>250)return {ok:false,message:'명령을 250자 이내로 말씀해주세요.'};
     const local=localCommand(text.trim());
-    if(local){paused=local==='pause';emit();menu();return {ok:true,message:paused?'네, 음성 안내를 멈췄어요.':'네, 다시 안내할게요. 현재 이 앱에는 메일 알림이 연결되지 않아 밀린 메일 요약은 아직 없어요.'};}
+    if(local){paused=local==='pause';emit();menu();return {ok:true,message:paused?'네, 음성 안내를 멈췄어요.':'네, 다시 안내할게요. 밀린 메일이 있으면 요약해서 알려드릴게요.'};}
     if(pending)return {ok:false,message:'앞선 요청을 처리 중이에요.'};
     pending=true;
     try{return await assistant.command(text);}catch(error){return {ok:false,message:error.message||'맥 대화 서버를 확인해주세요.'};}finally{pending=false;}

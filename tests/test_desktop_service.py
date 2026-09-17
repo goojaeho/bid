@@ -43,4 +43,14 @@ class GatewayTest(unittest.TestCase):
    r=TestClient(app).get('/gmail/callback?code=fake')
    self.assertEqual(r.status_code,400);exchange.assert_not_called()
 
+ def test_mail_analysis_stays_owner_scoped_and_does_not_execute_calendar(self):
+  with patch.object(s,'account',return_value='acct'),patch.object(s.gmail,'get_item',return_value={'id':7}),patch.object(s.todos,'_request') as db,patch.object(s.gmail,'_api') as google:
+   r=s.dispatch('owner','mail.analysis',{'id':7,'schedule':{'title':'회의','date':'2026-09-18','time':'15:00','attendees':['stranger']}})
+   self.assertTrue(r['ok']);self.assertNotIn('attendees',db.call_args.kwargs['json']['schedule'])
+   self.assertEqual(db.call_args.kwargs['params']['email'],'eq.acct');google.assert_not_called()
+ def test_trash_requires_bound_owner_token(self):
+  with patch.object(desktop_auth,'read',return_value={'email':'someone-else'}),patch.object(s.gmail,'_api') as api:
+   with self.assertRaises(ValueError):s.dispatch('owner','mail.trash.commit',{'token':'bad'})
+   api.assert_not_called()
+
 if __name__=='__main__':unittest.main()
