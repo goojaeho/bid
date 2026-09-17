@@ -26,7 +26,7 @@ TIMEOUT = 20
 GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me"
 CAL = "https://www.googleapis.com/calendar/v3"
 SCOPES = ("openid email "
-          "https://www.googleapis.com/auth/gmail.readonly "
+          "https://www.googleapis.com/auth/gmail.modify "
           "https://www.googleapis.com/auth/calendar.events")
 MAX_FETCH = 20
 BODY_CHARS = 4000
@@ -60,7 +60,7 @@ def callback_url() -> str:
     return f"{auth.base_url()}/gmail/callback"
 
 
-def connect_url() -> str:
+def connect_url(state: str = "") -> str:
     params = {
         "client_id": client_id(),
         "redirect_uri": callback_url(),
@@ -68,6 +68,8 @@ def connect_url() -> str:
         "scope": SCOPES,
         "access_type": "offline",
         "prompt": "consent",
+        "state": state,
+        "include_granted_scopes": "true",
     }
     return f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
 
@@ -423,7 +425,7 @@ def add_calendar_event(email: str, schedule: dict, description: str = "") -> str
         body["end"] = {"dateTime": end.isoformat(), "timeZone": "Asia/Seoul"}
     else:
         body["start"] = {"date": date}
-        body["end"] = {"date": date}
+        body["end"] = {"date": (datetime.fromisoformat(date) + timedelta(days=1)).date().isoformat()}
     data = _api(email, "POST", f"{CAL}/calendars/primary/events", json=body)
     return data.get("htmlLink", "")
 

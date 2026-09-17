@@ -3916,22 +3916,35 @@ def gmail_connect(request: Request):
         return RedirectResponse("/login", status_code=302)
     if not gmail.enabled():
         return RedirectResponse("/mail", status_code=302)
-    return RedirectResponse(gmail.connect_url(), status_code=302)
+    import secrets
+    from app import desktop_auth
+    nonce = secrets.token_hex(32)
+    state = desktop_auth.seal("mail-oauth", {"email": _admin_user(request), "nonce": nonce}, 600)
+    response = RedirectResponse(gmail.connect_url(state), status_code=302)
+    response.set_cookie("oag_mail_state", nonce, max_age=600, httponly=True, secure=True, samesite="lax")
+    return response
 
 
 @app.get("/gmail/callback")
-def gmail_callback(request: Request, code: str = Query("")):
+def gmail_callback(request: Request, code: str = Query(""), state: str = Query("")):
     if not _admin_user(request):
         return RedirectResponse("/login", status_code=302)
     if not code:
         return RedirectResponse("/mail", status_code=302)
+    from app import desktop_auth, desktop_service
+    try:
+        linked = desktop_auth.read(state, "mail-oauth")
+        if linked.get("email") != _admin_user(request) or linked.get("nonce") != request.cookies.get("oag_mail_state"):
+            raise ValueError()
+    except ValueError:
+        return HTMLResponse("Google 연결 요청이 만료됐어요. 사이트에서 다시 연결해주세요.", status_code=400)
     try:
         email = gmail.handle_callback(code)
         try:
             gmail.start_watch(email)
         except gmail.GmailError:
             pass  # 푸시 토픽 미설정이어도 연동은 유지 (수동 새로고침)
-        gmail.sync(email)
+        desktop_service.poll_mail()
     except (gmail.GmailError, store.StoreError, summarize.SummarizeError) as e:
         return HTMLResponse(layout("메일", "메일", "/mail",
                                    f'<div class="card"><p class="error">연동 실패: {esc(str(e))}</p></div>',
@@ -4664,6 +4677,19 @@ def desktop_token(body: dict = Body(...)):
         return JSONResponse({"token": token}, headers={"Cache-Control": "no-store"})
     except ValueError:
         return JSONResponse({"message": "앱 로그인을 다시 진행해주세요."}, status_code=401)
+
+
+@app.post("/api/desktop/service")
+def desktop_service_api(request: Request, body: dict = Body(...)):
+    from app import desktop_auth, desktop_service
+    user = desktop_auth.owner(request.headers.get("authorization", ""))
+    if not user:
+        return JSONResponse({"ok": False, "message": "앱에서 다시 로그인해주세요."}, status_code=401)
+    try:
+        result = desktop_service.dispatch(user, body.get("op"), body)
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    except (gmail.GmailError, store.StoreError, ValueError, TypeError, KeyError):
+        return JSONResponse({"ok": False, "message": "사이트의 Google 연결·권한 또는 요청 내용을 확인해주세요. 처리 결과가 불확실하면 다시 실행하기 전에 사이트를 확인해주세요."}, status_code=400)
 
 
 @app.post("/api/desktop/command")
