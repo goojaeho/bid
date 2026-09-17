@@ -1,0 +1,3 @@
+const {test}=require('node:test');const assert=require('node:assert/strict');const {localCommand,validateTts}=require('./logic.cjs');
+test('meeting and resume commands stay local',()=>{assert.equal(localCommand('자비스 회의 시작하니까 잠깐 알람 멈춰'),'pause');assert.equal(localCommand('이제 보고서 등록해줘'),null);assert.equal(localCommand('다시 시작해'),'resume');});
+test('tts endpoint validation',()=>{assert.equal(validateTts(''),'');assert.equal(validateTts('http://127.0.0.1:8000/tts'),'http://127.0.0.1:8000/tts');for(const url of ['file:///secret','javascript:alert(1)','https://user:password@example.com'])assert.throws(()=>validateTts(url));});

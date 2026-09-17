@@ -1,0 +1,2 @@
+document.getElementById('connect').onclick=async()=>{const pairing=document.getElementById('token').value.trim();if(!/^[a-f0-9]{48}$/.test(pairing)){document.getElementById('status').textContent='앱에서 연결 코드를 다시 복사해주세요.';return;}await chrome.storage.local.set({pairing});await chrome.runtime.sendMessage({type:'reconnect'});document.getElementById('status').textContent='연결을 요청했어요. 사이트 탭도 열어주세요.';};
+chrome.runtime.sendMessage({type:'status'}).then(s=>document.getElementById('status').textContent=s.connected?'앱에 연결됨':'앱 연결 대기 중');

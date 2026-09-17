@@ -1,0 +1,12 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; media-src blob: data:; connect-src 'none'"><title>자비스</title><link rel="stylesheet" href="style.css"></head><body>
+<header><div class="orb">J</div><div><h1>자비스</h1><p>오늘 할 일, 같이 정리해요.</p></div><span id="connection">연결 확인 중</span></header>
+<main><section id="conversation" aria-live="polite"><article class="assistant">안녕하세요. 할 일을 알려주시거나 “브리핑해봐”라고 해주세요.</article></section>
+<form id="form"><label for="input">자비스에게 할 말</label><div class="row"><input id="input" maxlength="250" placeholder="내일 보고서 작성 할 일 등록해줘" autocomplete="off"><button id="send">보내기</button></div></form>
+<div class="row actions"><button id="dictate">음성 입력 안내</button><button id="brief">브리핑해봐</button><button id="pause">안내 멈춤</button><button id="site">기존 사이트</button></div>
+<p id="status" role="status">음성 입력은 입력칸을 누른 뒤 Win+H를 사용하세요. 상시 “자비스” 호출은 준비 중이에요.</p>
+<details><summary>브라우저 연결 · 음성 설정</summary><p>Chrome 또는 Edge에서 확장 관리 → 개발자 모드 → 압축해제된 확장 로드로 아래 폴더를 추가하세요. 확장 아이콘을 열어 연결 코드를 붙여넣고, 로그인한 자비스 사이트 탭을 열어두세요.</p>
+<div class="row"><button id="extension">확장 폴더 열기</button><button id="pair">연결 코드 복사</button></div>
+<p>앱을 다시 실행하면 연결 코드도 새로 발급됩니다.</p>
+<label for="tts">맥 음성 서버 주소</label><input id="tts" placeholder="서버 준비 후 입력 (선택)"><p>현재 연결 규격: POST {text, language} → audio 응답. 맥의 실제 규격을 받으면 맞춰 연결합니다. 비워두면 윈도우 기본 음성을 사용해요.</p>
+<label><input type="checkbox" id="autostart"> 윈도우 로그인 시 자비스 시작</label><button id="save">설정 저장</button></details>
+<footer>창을 닫아도 실행돼요. 완전히 종료하려면 트레이의 자비스 메뉴를 이용하세요.<br>이번 버전: 할 일 등록·브리핑. 메일 수신과 통화 분석은 아직 연결되지 않았어요.</footer></main><script src="renderer.js"></script></body></html>
