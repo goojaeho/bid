@@ -1,6 +1,8 @@
 const {contextBridge,ipcRenderer}=require('electron');
 contextBridge.exposeInMainWorld('jarvis',{
-  transcribe:bytes=>ipcRenderer.invoke('transcribe',bytes),
+  wake:value=>ipcRenderer.invoke('wake',value),
+  show:()=>ipcRenderer.invoke('show'),
+  transcribe:(bytes,mode)=>ipcRenderer.invoke('transcribe',bytes,mode),
   onStopRecording:callback=>ipcRenderer.on('stop-recording',()=>callback()),
   state:()=>ipcRenderer.invoke('state'),login:()=>ipcRenderer.invoke('login'),logout:()=>ipcRenderer.invoke('logout'),
   site:()=>ipcRenderer.invoke('site'),

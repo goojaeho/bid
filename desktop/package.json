@@ -1,6 +1,6 @@
 {
   "name": "jarvis-desktop",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
   "description": "Personal Jarvis desktop companion",
   "author": "Jarvis project",
@@ -27,7 +27,9 @@
       "style.css",
       "renderer.js",
       "speech.cjs",
-      "recorder.js"
+      "recorder.js",
+      "assets/*",
+      "voice-utils.js"
     ],
     "win": {
       "signAndEditExecutable": false

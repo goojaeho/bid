@@ -1,19 +1,24 @@
 const {spawn}=require('node:child_process');
 class Speech {
- constructor(config,script){this.config=config;this.script=script;this.child=null;}
- transcribe(bytes){
-  if(this.child)return Promise.reject(Error('이미 음성을 변환하고 있어요.'));
-  if(!(bytes instanceof Uint8Array)||!bytes.length||bytes.length>12*1024*1024)return Promise.reject(Error('녹음 파일을 확인해주세요.'));
-  return new Promise((resolve,reject)=>{
-   const child=spawn(this.config.python,[this.script,this.config.model],{windowsHide:true,stdio:['pipe','pipe','pipe'],env:{...process.env,HF_HUB_OFFLINE:'1',PYTHONIOENCODING:'utf-8'}});this.child=child;
-   let output='',settled=false;
-   const finish=(error,value)=>{if(settled)return;settled=true;clearTimeout(timer);if(this.child===child)this.child=null;error?reject(error):resolve(value);};
-   const timer=setTimeout(()=>{child.kill();finish(Error('음성 변환 시간이 길어졌어요. 더 짧게 녹음해주세요.'));},120000);
-   child.stdout.on('data',data=>{output+=data.toString();if(output.length>64000){child.kill();finish(Error('변환 결과가 너무 길어요.'));}});
-   child.stderr.resume();child.stdin.on('error',()=>{});
-   child.on('error',()=>finish(Error('음성 인식 프로그램을 실행하지 못했어요.')));
-   child.on('close',code=>{if(code!==0)return finish(Error('음성을 변환하지 못했어요. 다시 녹음해주세요.'));try{const value=JSON.parse(output);if(typeof value.text!=='string')throw Error();finish(null,value);}catch{finish(Error('음성 인식 결과를 확인하지 못했어요.'));}});
-   child.stdin.end(Buffer.from(bytes));
+ constructor(config,script){this.config=config;this.script=script;this.child=null;this.pending=null;this.next=0;this.start();}
+ start(){
+  if(this.child)return;
+  const child=spawn(this.config.python,['-u',this.script,this.config.model,this.config.wakeModel||this.config.model],{windowsHide:true,stdio:['pipe','pipe','pipe'],env:{...process.env,HF_HUB_OFFLINE:'1',PYTHONIOENCODING:'utf-8'}});this.child=child;
+  let output='';
+  child.stdout.on('data',chunk=>{output+=chunk.toString();if(output.length>64000){child.kill();return;}
+   let index;while((index=output.indexOf('\n'))>=0){const line=output.slice(0,index);output=output.slice(index+1);try{const data=JSON.parse(line);if(this.pending&&data.id===this.pending.id){const p=this.pending;this.pending=null;clearTimeout(p.timer);data.error?p.reject(Error(data.error)):p.resolve(data);}}catch{}}
+  });
+  child.stderr.resume();child.stdin.on('error',()=>{});
+  const ended=()=>{if(this.child===child)this.child=null;if(this.pending){clearTimeout(this.pending.timer);this.pending.reject(Error('음성 인식 연결이 끊겼어요. 다시 시도해주세요.'));this.pending=null;}};
+  child.on('error',ended);child.on('close',ended);
+ }
+ transcribe(bytes,mode="command"){
+  if(this.pending)return Promise.reject(Error('이미 음성을 변환하고 있어요.'));
+  if(!(bytes instanceof Uint8Array)||!bytes.length||bytes.length>12*1024*1024)return Promise.reject(Error('녹음을 확인해주세요.'));
+  this.start();
+  return new Promise((resolve,reject)=>{const id=++this.next;
+   const timer=setTimeout(()=>{this.close();},120000);
+   this.pending={id,resolve,reject,timer};this.child.stdin.write(JSON.stringify({id,mode,audio:Buffer.from(bytes).toString('base64')})+'\n');
   });
  }
  close(){if(this.child)this.child.kill();}

@@ -2,12 +2,14 @@ const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell, safeStorage
 const { Account } = require('./account.cjs');
 const { Speech } = require('./speech.cjs');
 const fs = require('node:fs');
+const {privateDecrypt,constants}=require('node:crypto');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { localCommand, validateTts } = require('./logic.cjs');
 let win, tray, account, speech, quitting=false, paused=false, settings={}, pending=false;
+let ttsToken='',ttsOrigin='',ttsCache=new Map();
 const page=pathToFileURL(path.join(__dirname,'index.html')).href;
-function state() { return {connected:!!account?.token, paused, ttsUrl:settings.ttsUrl||'', autoStart:app.getLoginItemSettings().openAtLogin}; }
+function state() { return {connected:!!account?.token, paused, ttsUrl:settings.ttsUrl||'', wakeEnabled:!!settings.wakeEnabled, autoStart:app.getLoginItemSettings().openAtLogin}; }
 function emit() { if(win && !win.isDestroyed()) win.webContents.send('state',state()); }
 function show() { win.show(); win.focus(); }
 function check(event) { if(event.sender!==win.webContents || event.senderFrame.url!==page) throw new Error('허용되지 않은 요청'); }
@@ -25,7 +27,26 @@ app.on('second-instance',()=>{if(win)show();});
 app.whenReady().then(()=>{
   const config=path.join(app.getPath('userData'),'settings.json');
   try{settings=JSON.parse(fs.readFileSync(config,'utf8'));}catch{}
-  win=new BrowserWindow({width:880,height:790,minWidth:600,minHeight:650,show:false,backgroundColor:'#101321',title:'자비스',webPreferences:{preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,backgroundThrottling:false}});
+  const tokenFile=path.join(app.getPath('userData'),'tts-token.bin');
+  const metadataFile=path.join(app.getPath('userData'),'tts-origin.json');
+  const pairingFile=path.join(app.getPath('userData'),'tts-pairing.json');
+  const privateFile=path.join(app.getPath('userData'),'tts-private.pem');
+  try {
+    if(fs.existsSync(pairingFile)){
+      const pair=JSON.parse(fs.readFileSync(pairingFile,'utf8'));
+      const secret=privateDecrypt({key:fs.readFileSync(privateFile),padding:constants.RSA_PKCS1_OAEP_PADDING,oaepHash:'sha256'},Buffer.from(pair.ciphertext,'base64')).toString('utf8');
+      fs.writeFileSync(tokenFile,safeStorage.encryptString(secret));
+      fs.writeFileSync(metadataFile,JSON.stringify({origin:new URL(pair.url).origin}));
+      settings.ttsUrl=pair.url;
+      if(settings.wakeEnabled===undefined)settings.wakeEnabled=true;
+      fs.writeFileSync(config,JSON.stringify(settings));
+      fs.unlinkSync(pairingFile);fs.unlinkSync(privateFile);
+    }
+    ttsToken=safeStorage.decryptString(fs.readFileSync(tokenFile));
+    ttsOrigin=JSON.parse(fs.readFileSync(metadataFile,'utf8')).origin;
+  }catch{}
+
+  win=new BrowserWindow({width:880,height:790,minWidth:600,minHeight:650,show:false,backgroundColor:'#101321',title:'자비스',webPreferences:{preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,backgroundThrottling:false,autoplayPolicy:'no-user-gesture-required'}});
   win.removeMenu();
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   win.webContents.on('will-navigate',event=>event.preventDefault());
@@ -34,16 +55,19 @@ app.whenReady().then(()=>{
     details.mediaTypes?.includes('audio') && !details.mediaTypes?.includes('video')));
   win.webContents.session.setPermissionCheckHandler((contents,permission)=>
     contents===win.webContents && contents.getURL()===page && permission==='media');
-  win.on('hide',()=>win.webContents.send('stop-recording'));
+  win.on('hide',()=>{if(!settings.wakeEnabled)win.webContents.send('stop-recording');});
   win.on('close',e=>{if(!quitting){e.preventDefault();win.hide();}});
   win.loadFile('index.html'); win.once('ready-to-show',show);
-  const icon=nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAIElEQVQ4T2NkYPj/n4ECwESJ5lEDRg0YNWDUgFEDBgYAAGkCH+F7mVIAAAAASUVORK5CYII=');
+  const icon=nativeImage.createFromPath(path.join(__dirname,'assets','tray.ico'));
+  if(icon.isEmpty())throw new Error('Tray icon failed to load');
   tray=new Tray(icon);tray.setToolTip('자비스 — 클릭해서 열기');tray.on('click',show);menu();
   account=new Account({directory:app.getPath('userData'),crypto:safeStorage,open:url=>shell.openExternal(url),onChange:notice=>{emit();if(notice)win.webContents.send('notice',notice);else show();}});
   account.load();
   const speechRoot=app.isPackaged?process.resourcesPath:__dirname;
   try { speech=new Speech(JSON.parse(fs.readFileSync(path.join(speechRoot,'speech-runtime.json'),'utf8')),path.join(speechRoot,'transcribe.py')); } catch {}
-  ipcMain.handle('transcribe',async(e,bytes)=>{check(e);if(!speech)return {error:'음성 인식 환경이 준비되지 않았어요.'};try{return await speech.transcribe(bytes);}catch(error){return {error:error.message};}});
+  ipcMain.handle('transcribe',async(e,bytes,mode)=>{check(e);if(!speech)return {error:'음성 인식 환경이 준비되지 않았어요.'};try{return await speech.transcribe(bytes,mode==='wake'?'wake':'command');}catch(error){return {error:error.message};}});
+  ipcMain.handle('wake', (e,value)=>{check(e);settings.wakeEnabled=!!value;fs.writeFileSync(config,JSON.stringify(settings));emit();return state();});
+  ipcMain.handle('show', e=>{check(e);show();});
   ipcMain.handle('state',e=>{check(e);return state();});
   ipcMain.handle('login',async e=>{check(e);await account.login();return {ok:true};});
   ipcMain.handle('logout',e=>{check(e);account.logout();return state();});
@@ -67,14 +91,20 @@ app.whenReady().then(()=>{
   ipcMain.handle('tts',async(e,text)=>{
     check(e);if(paused||!settings.ttsUrl)return null;
     if(typeof text!=='string'||text.length>12000)throw new Error('잘못된 음성 요청');
-    const response=await fetch(validateTts(settings.ttsUrl),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,language:'ko'}),signal:AbortSignal.timeout(30000),redirect:'error'});
+    const url=validateTts(settings.ttsUrl),cacheKey=url+'|'+text;
+    if(ttsCache.has(cacheKey))return ttsCache.get(cacheKey);
+    const headers={'Content-Type':'application/json'};
+    if(ttsToken&&new URL(url).origin===ttsOrigin)headers.Authorization='Bearer '+ttsToken;
+    const response=await fetch(url,{method:'POST',headers,body:JSON.stringify({text,language:'ko'}),signal:AbortSignal.timeout(30000),redirect:'error'});
     if(!response.ok)throw new Error('음성 서버 응답 오류');
     const mime=response.headers.get('content-type')||'';
     if(!mime.startsWith('audio/'))throw new Error('음성 서버가 오디오를 반환하지 않았습니다.');
     const chunks=[];let size=0;
     for await(const chunk of response.body){size+=chunk.length;if(size>20*1024*1024)throw new Error('음성 파일이 너무 큽니다.');chunks.push(chunk);}
     if(paused)return null;
-    return {mime,data:Buffer.concat(chunks).toString('base64')};
+    const result={mime,data:Buffer.concat(chunks).toString('base64')};
+    if(size<1024*1024){if(ttsCache.size>=10)ttsCache.delete(ttsCache.keys().next().value);ttsCache.set(cacheKey,result);}
+    return result;
   });
 });
 app.on('before-quit',()=>{quitting=true;if(account)account.cancel();if(speech)speech.close();});
