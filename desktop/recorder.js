@@ -2,6 +2,15 @@ let micPromise=null;
 let recorder=null,micStream=null,recordTimer=null,recordStarting=false,cancelRecording=false;
 let context=null,analyser=null,processor=null,source=null,silentGain=null,animation=null;
 let wakeProcessing=false,wakeParts=[],preRoll=[],speechStart=0,lastLoud=0,commandAuto=false,commandSpoke=false,commandStarted=0,lastCommandLoud=0;
+let interruptParts=[],interruptStart=0,interruptLast=0,interruptActive=false;
+async function finishInterrupt(parts,rate){
+ transcribing=true;recordingControls();
+ try{const result=await window.jarvis.transcribe(VoiceUtils.wav(parts,rate),'command');
+  if(result.error)throw Error(result.error);
+  const text=(result.text||'').trim().replace(/^자비스[야,\s]*/,'');
+  transcribing=false;if(text&&text.length<=250)await send(text);
+ }catch{$('status').textContent='다시 말씀해주세요.';}finally{transcribing=false;recordingControls();}
+}
 function recordingControls(){ $('dictate').textContent=transcribing?'글로 바꾸는 중…':recording?'■ 녹음 끝내기':'마이크';$('dictate').disabled=transcribing||recordStarting;$('send').disabled=recording||transcribing;$('brief').disabled=recording||transcribing;$('record-cancel').disabled=!recording&&!recordStarting;$('record-stop').disabled=!recording; }
 function resetWake(){wakeParts=[];preRoll=[];speechStart=0;lastLoud=0;}
 let waveHistory=[],waveTick=0;
@@ -27,6 +36,18 @@ async function openMic(){
  processor=context.createScriptProcessor(4096,1,1);silentGain=context.createGain();silentGain.gain.value=0;source.connect(analyser);source.connect(processor);processor.connect(silentGain);silentGain.connect(context.destination);
  processor.onaudioprocess=event=>{
   const samples=event.inputBuffer.getChannelData(0);let energy=0;for(const s of samples)energy+=s*s;const loud=Math.sqrt(energy/samples.length)>0.012,now=performance.now();
+  if(state.wakeEnabled&&!recording&&!transcribing&&(audio||speechSynthesis.speaking||interruptActive)){
+   const voice=Math.sqrt(energy/samples.length)>0.025;
+   if(voice){if(!interruptStart)interruptStart=now;interruptLast=now;}
+   if(interruptStart)interruptParts.push(new Float32Array(samples));
+   if(!interruptActive&&interruptStart&&now-interruptLast>180){interruptParts=[];interruptStart=0;}
+   if(!interruptActive&&interruptStart&&now-interruptStart>=220&&voice){interruptActive=true;stop();$('status').textContent='네, 말씀하세요. 듣고 있어요.';}
+   if(interruptActive&&(now-interruptLast>900||now-interruptStart>15000)){
+    const parts=interruptParts,rate=context.sampleRate;interruptParts=[];interruptStart=0;interruptActive=false;finishInterrupt(parts,rate);
+   }
+   return;
+  }
+  if(!interruptActive){interruptParts=[];interruptStart=0;}
   if(recording&&commandAuto){if(loud){commandSpoke=true;lastCommandLoud=now;}if(commandSpoke&&now-lastCommandLoud>1000)finishRecording();else if(!commandSpoke&&now-commandStarted>8000)finishRecording(true);return;}
   if(recording||transcribing||busy||wakeProcessing||speechSynthesis.speaking||audio||!state.wakeEnabled){resetWake();return;}
   const copy=new Float32Array(samples);preRoll.push(copy);if(preRoll.length>4)preRoll.shift();
@@ -36,13 +57,26 @@ async function openMic(){
  };
  $('mic-state').textContent=state.wakeEnabled?'마이크 켜짐 · 자비스 호출 대기':'마이크 켜짐 · 녹음';drawWave();
 }
-function closeMic(){clearTimeout(recordTimer);if(animation)cancelAnimationFrame(animation);if(processor)processor.disconnect();if(source)source.disconnect();if(silentGain)silentGain.disconnect();if(micStream)micStream.getTracks().forEach(t=>t.stop());if(context)context.close();micStream=null;context=null;processor=null;resetWake();$('mic-state').textContent='마이크 꺼짐';waveHistory=[];paintWave();}
+function closeMic(){interruptParts=[];interruptStart=0;interruptActive=false;clearTimeout(recordTimer);if(animation)cancelAnimationFrame(animation);if(processor)processor.disconnect();if(source)source.disconnect();if(silentGain)silentGain.disconnect();if(micStream)micStream.getTracks().forEach(t=>t.stop());if(context)context.close();micStream=null;context=null;processor=null;resetWake();$('mic-state').textContent='마이크 꺼짐';waveHistory=[];paintWave();}
 async function syncWake(){ $('wake').checked=!!state.wakeEnabled;if(state.wakeEnabled){try{await ensureMic();if(!state.wakeEnabled&&!recording&&!recordStarting){closeMic();return;}$('mic-state').textContent='마이크 켜짐 · 자비스 호출 대기';}catch{$('mic-state').textContent='마이크 연결 필요';$('status').textContent='마이크 권한을 확인한 뒤 호출 듣기를 다시 켜주세요.';}}else if(!recording&&!recordStarting)closeMic(); }
+const wakeReplies=['네, 말씀하세요.','네, 무엇을 도와드릴까요?','네, 듣고 있어요.'];
+let replyIndex=0,warmedVoice='';
+async function warmWakeReplies(){
+ if(!state.ttsUrl||state.paused||warmedVoice===state.ttsUrl)return;
+ warmedVoice=state.ttsUrl;
+ for(const text of wakeReplies){try{await window.jarvis.tts(text);}catch{warmedVoice='';break;}}
+}
+async function acknowledgeWake(){
+ const text=wakeReplies[replyIndex++%wakeReplies.length];
+ $('status').textContent=text;message(text,'assistant');
+ busy=true;
+ try{await speak(text);}finally{busy=false;}
+}
 async function detectWake(parts,rate){wakeProcessing=true;try{
  const result=await window.jarvis.transcribe(VoiceUtils.wav(parts,rate),'wake');if(!state.wakeEnabled||recording||busy)return;
  const tail=VoiceUtils.wakeCommand(result.text||'');if(tail===null)return;
  await window.jarvis.show();$('status').textContent='네, 듣고 있어요.';
- if(tail.length>1){$('input').value=tail;await send(tail);}else await startRecording(true);
+ if(tail.length>1){$('input').value=tail;await send(tail);}else {await acknowledgeWake();if(state.wakeEnabled&&!recording&&!recordStarting&&!interruptActive&&!transcribing)await startRecording(true);}
  }catch{}finally{wakeProcessing=false;}}
 function finishRecording(cancel=false){cancelRecording=cancel;clearTimeout(recordTimer);if(recorder&&recorder.state==='recording')recorder.stop();}
 async function startRecording(auto=false){
@@ -81,3 +115,5 @@ $('record-cancel').onclick=()=>finishRecording(true);
 $('record-stop').onclick=()=>finishRecording();
 window.addEventListener('resize',()=>paintWave());
 recordingControls();paintWave();
+
+window.jarvis.onState(()=>warmWakeReplies());window.jarvis.state().then(value=>{update(value);warmWakeReplies();});

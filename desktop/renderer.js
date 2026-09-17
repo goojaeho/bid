@@ -25,7 +25,7 @@ async function speak(text){
   }catch{$('status').textContent='맥 음성 서버 연결을 확인해주세요. 이번에는 기본 음성으로 읽을게요.';}
  }
  if(current!==generation||state.paused)return;
- const utterance=new SpeechSynthesisUtterance(text);utterance.lang='ko-KR';const voices=speechSynthesis.getVoices().filter(v=>v.lang.toLowerCase().startsWith('ko'));utterance.voice=voices.find(v=>/Heami|SunHi|female/i.test(v.name))||voices[0]||null;utterance.rate=1;speechSynthesis.speak(utterance);
+ const utterance=new SpeechSynthesisUtterance(text);utterance.lang='ko-KR';const voices=speechSynthesis.getVoices().filter(v=>v.lang.toLowerCase().startsWith('ko'));utterance.voice=voices.find(v=>/Heami|SunHi|female/i.test(v.name))||voices[0]||null;utterance.rate=1;await new Promise(resolve=>{playbackResolve=resolve;utterance.onend=resolve;utterance.onerror=resolve;speechSynthesis.speak(utterance);});playbackResolve=null;
 }
 async function send(text){if(busy||recording||transcribing||!text.trim())return;busy=true;$('send').disabled=true;message(text,'user');$('input').value='';$('status').textContent='처리 중이에요…';try{const result=await window.jarvis.command(text);message(result.message,'assistant');$('status').textContent=result.ok?'완료했어요.':'내용을 확인해주세요.';await speak(result.message);}catch{message('처리 결과를 확인하지 못했어요. 기존 사이트에서 등록 여부를 확인해주세요.','assistant');}finally{busy=false;$('send').disabled=false;}}
 $('form').onsubmit=e=>{e.preventDefault();send($('input').value);};$('brief').onclick=()=>send('브리핑해봐');

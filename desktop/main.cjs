@@ -1,13 +1,14 @@
 const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell, safeStorage } = require('electron');
 const { Account } = require('./account.cjs');
 const { Speech } = require('./speech.cjs');
+const { Assistant } = require('./assistant.cjs');
 const fs = require('node:fs');
 const {privateDecrypt,constants}=require('node:crypto');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { localCommand, validateTts } = require('./logic.cjs');
 let win, tray, account, speech, quitting=false, paused=false, settings={}, pending=false;
-let ttsToken='',ttsOrigin='',ttsCache=new Map();
+let ttsToken='',ttsOrigin='',ttsCache=new Map(),ttsQueue=Promise.resolve();
 const page=pathToFileURL(path.join(__dirname,'index.html')).href;
 function state() { return {connected:!!account?.token, paused, ttsUrl:settings.ttsUrl||'', wakeEnabled:!!settings.wakeEnabled, autoStart:app.getLoginItemSettings().openAtLogin}; }
 function emit() { if(win && !win.isDestroyed()) win.webContents.send('state',state()); }
@@ -63,6 +64,19 @@ app.whenReady().then(()=>{
   tray=new Tray(icon);tray.setToolTip('자비스 — 클릭해서 열기');tray.on('click',show);menu();
   account=new Account({directory:app.getPath('userData'),crypto:safeStorage,open:url=>shell.openExternal(url),onChange:notice=>{emit();if(notice)win.webContents.send('notice',notice);else show();}});
   account.load();
+  const assistant=new Assistant({execute:text=>account.command(text),infer:async body=>{
+    if(!ttsToken||!ttsOrigin)throw Error('맥 대화 서버 연결 설정이 필요해요.');
+    const url=new URL('/assistant',ttsOrigin);url.port='8766';
+    let response;
+    for(let attempt=0;attempt<3;attempt++){
+      response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+ttsToken},body:JSON.stringify(body),signal:AbortSignal.timeout(90000),redirect:'error'});
+      if(response.status!==429||attempt===2)break;
+      const delay=Math.min(5,Math.max(1,Number(response.headers.get('retry-after'))||2));
+      await response.body?.cancel();await new Promise(resolve=>setTimeout(resolve,delay*1000));
+    }
+    if(!response.ok)throw Error(response.status===429?'맥이 앞선 요청을 처리 중이에요. 잠시 뒤 말씀해주세요.':'맥 대화 서버에 연결하지 못했어요.');
+    const data=await response.text();if(data.length>20000)throw Error('대화 응답이 너무 길어요.');return JSON.parse(data);
+  }});
   const speechRoot=app.isPackaged?process.resourcesPath:__dirname;
   try { speech=new Speech(JSON.parse(fs.readFileSync(path.join(speechRoot,'speech-runtime.json'),'utf8')),path.join(speechRoot,'transcribe.py')); } catch {}
   ipcMain.handle('transcribe',async(e,bytes,mode)=>{check(e);if(!speech)return {error:'음성 인식 환경이 준비되지 않았어요.'};try{return await speech.transcribe(bytes,mode==='wake'?'wake':'command');}catch(error){return {error:error.message};}});
@@ -70,7 +84,7 @@ app.whenReady().then(()=>{
   ipcMain.handle('show', e=>{check(e);show();});
   ipcMain.handle('state',e=>{check(e);return state();});
   ipcMain.handle('login',async e=>{check(e);await account.login();return {ok:true};});
-  ipcMain.handle('logout',e=>{check(e);account.logout();return state();});
+  ipcMain.handle('logout',e=>{check(e);assistant.reset();account.logout();return state();});
   ipcMain.handle('site',e=>{check(e);return shell.openExternal('https://www.oneaigen.com/jarvis');});
   ipcMain.handle('pause',(e,value)=>{check(e);paused=!!value;emit();menu();return state();});
   ipcMain.handle('settings',(e,value)=>{
@@ -85,11 +99,14 @@ app.whenReady().then(()=>{
     if(local){paused=local==='pause';emit();menu();return {ok:true,message:paused?'네, 음성 안내를 멈췄어요.':'네, 다시 안내할게요. 현재 이 앱에는 메일 알림이 연결되지 않아 밀린 메일 요약은 아직 없어요.'};}
     if(pending)return {ok:false,message:'앞선 요청을 처리 중이에요.'};
     pending=true;
-    try{return await account.command(text);}finally{pending=false;}
+    try{return await assistant.command(text);}catch(error){return {ok:false,message:error.message||'맥 대화 서버를 확인해주세요.'};}finally{pending=false;}
   });
 
-  ipcMain.handle('tts',async(e,text)=>{
-    check(e);if(paused||!settings.ttsUrl)return null;
+  ipcMain.handle('tts',(e,text)=>{
+    check(e);const job=ttsQueue.then(()=>synthesize(text));ttsQueue=job.catch(()=>{});return job;
+  });
+  async function synthesize(text){
+    if(paused||!settings.ttsUrl)return null;
     if(typeof text!=='string'||text.length>12000)throw new Error('잘못된 음성 요청');
     const url=validateTts(settings.ttsUrl),cacheKey=url+'|'+text;
     if(ttsCache.has(cacheKey))return ttsCache.get(cacheKey);
@@ -105,7 +122,7 @@ app.whenReady().then(()=>{
     const result={mime,data:Buffer.concat(chunks).toString('base64')};
     if(size<1024*1024){if(ttsCache.size>=10)ttsCache.delete(ttsCache.keys().next().value);ttsCache.set(cacheKey,result);}
     return result;
-  });
+  }
 });
 app.on('before-quit',()=>{quitting=true;if(account)account.cancel();if(speech)speech.close();});
 app.on('window-all-closed',()=>{});
