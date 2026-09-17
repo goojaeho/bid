@@ -1,17 +1,14 @@
-const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell, clipboard } = require('electron');
-const { WebSocketServer, WebSocket } = require('ws');
-const { randomBytes, randomUUID } = require('node:crypto');
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell, safeStorage } = require('electron');
+const { Account } = require('./account.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { localCommand, validateTts } = require('./logic.cjs');
-let win, tray, bridge, peer, quitting=false, paused=false, settings={}, pending=null, ready=false;
-const token=randomBytes(24).toString('hex');
+let win, tray, account, quitting=false, paused=false, settings={}, pending=false;
 const page=pathToFileURL(path.join(__dirname,'index.html')).href;
-function state() { return {connected:!!peer && ready, paused, ttsUrl:settings.ttsUrl||'', autoStart:app.getLoginItemSettings().openAtLogin, pairing:token}; }
+function state() { return {connected:!!account?.token, paused, ttsUrl:settings.ttsUrl||'', autoStart:app.getLoginItemSettings().openAtLogin}; }
 function emit() { if(win && !win.isDestroyed()) win.webContents.send('state',state()); }
 function show() { win.show(); win.focus(); }
-function failPending(message) { if(pending) { clearTimeout(pending.timer); pending.resolve({ok:false,message}); pending=null; } }
 function check(event) { if(event.sender!==win.webContents || event.senderFrame.url!==page) throw new Error('허용되지 않은 요청'); }
 function menu() {
   tray.setContextMenu(Menu.buildFromTemplate([
@@ -36,29 +33,11 @@ app.whenReady().then(()=>{
   win.loadFile('index.html'); win.once('ready-to-show',show);
   const icon=nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAIElEQVQ4T2NkYPj/n4ECwESJ5lEDRg0YNWDUgFEDBgYAAGkCH+F7mVIAAAAASUVORK5CYII=');
   tray=new Tray(icon);tray.setToolTip('자비스 — 클릭해서 열기');tray.on('click',show);menu();
-  bridge=new WebSocketServer({host:'127.0.0.1',port:17843,maxPayload:65536});
-  bridge.on('error',()=>win.webContents.send('notice','연결 포트 17843을 사용할 수 없습니다. 다른 자비스 앱이 실행 중인지 확인해주세요.'));
-  bridge.on('connection',(socket,req)=>{
-    if(!/^chrome-extension:\/\/[a-p]{32}$/.test(req.headers.origin||'')){socket.close();return;}
-    let authenticated=false;
-    const deadline=setTimeout(()=>socket.close(),4000);
-    socket.on('message',raw=>{
-      let data;try{data=JSON.parse(raw);}catch{return socket.close();}
-      if(!authenticated){
-        if(data.type!=='pair'||data.token!==token){socket.close();return;}
-        authenticated=true;clearTimeout(deadline);if(peer)peer.close();peer=socket;ready=false;emit();return;
-      }
-      if(socket!==peer)return;
-      if(data.type==='status'){ready=data.ready===true;emit();}
-      if(data.type==='result'&&pending&&data.id===pending.id){
-        clearTimeout(pending.timer);pending.resolve({ok:data.result?.ok===true,message:String(data.result?.message||'응답을 확인하지 못했습니다.').slice(0,12000)});pending=null;
-      }
-    });
-    socket.on('close',()=>{clearTimeout(deadline);if(peer===socket){peer=null;ready=false;failPending('브라우저 연결이 끊겼어요. 등록 여부는 사이트에서 확인해주세요.');emit();}});
-  });
+  account=new Account({directory:app.getPath('userData'),crypto:safeStorage,open:url=>shell.openExternal(url),onChange:notice=>{emit();if(notice)win.webContents.send('notice',notice);else show();}});
+  account.load();
   ipcMain.handle('state',e=>{check(e);return state();});
-  ipcMain.handle('copy-pairing',e=>{check(e);clipboard.writeText(token);});
-  ipcMain.handle('extension',e=>{check(e);return shell.openPath(app.isPackaged?path.join(process.resourcesPath,'extension'):path.join(__dirname,'extension'));});
+  ipcMain.handle('login',async e=>{check(e);await account.login();return {ok:true};});
+  ipcMain.handle('logout',e=>{check(e);account.logout();return state();});
   ipcMain.handle('site',e=>{check(e);return shell.openExternal('https://www.oneaigen.com/jarvis');});
   ipcMain.handle('pause',(e,value)=>{check(e);paused=!!value;emit();menu();return state();});
   ipcMain.handle('settings',(e,value)=>{
@@ -72,12 +51,10 @@ app.whenReady().then(()=>{
     const local=localCommand(text.trim());
     if(local){paused=local==='pause';emit();menu();return {ok:true,message:paused?'네, 음성 안내를 멈췄어요.':'네, 다시 안내할게요. 현재 이 앱에는 메일 알림이 연결되지 않아 밀린 메일 요약은 아직 없어요.'};}
     if(pending)return {ok:false,message:'앞선 요청을 처리 중이에요.'};
-    if(!peer||!ready)return {ok:false,message:'확장 기능을 연결하고 브라우저에서 자비스 사이트를 열어주세요.'};
-    return new Promise(resolve=>{
-      const id=randomUUID();pending={id,resolve,timer:setTimeout(()=>failPending('응답 시간이 초과됐어요. 중복 등록을 피하려면 사이트에서 먼저 확인해주세요.'),25000)};
-      peer.send(JSON.stringify({type:'command',id,text}));
-    });
+    pending=true;
+    try{return await account.command(text);}finally{pending=false;}
   });
+
   ipcMain.handle('tts',async(e,text)=>{
     check(e);if(paused||!settings.ttsUrl)return null;
     if(typeof text!=='string'||text.length>12000)throw new Error('잘못된 음성 요청');
@@ -91,6 +68,6 @@ app.whenReady().then(()=>{
     return {mime,data:Buffer.concat(chunks).toString('base64')};
   });
 });
-app.on('before-quit',()=>{quitting=true;failPending('앱을 종료합니다.');if(peer)peer.close();if(bridge)bridge.close();});
+app.on('before-quit',()=>{quitting=true;if(account)account.cancel();});
 app.on('window-all-closed',()=>{});
 }

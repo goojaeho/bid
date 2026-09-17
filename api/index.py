@@ -4608,7 +4608,18 @@ def login_page():
 
 
 @app.get("/auth/callback")
-def auth_callback(code: str = Query("")):
+def auth_callback(code: str = Query(""), state: str = Query("")):
+    if state.startswith("desktop."):
+        from app import desktop_auth
+        try:
+            desktop_auth.read(state.removeprefix("desktop."), "state")
+            if not code:
+                raise ValueError("로그인이 취소됐어요. 앱에서 다시 로그인해주세요.")
+            email = auth.handle_callback(code)
+            target = desktop_auth.finish(state, email)
+            return RedirectResponse(target, status_code=302, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+        except (ValueError, auth.AuthError):
+            return HTMLResponse("앱 로그인을 완료하지 못했습니다. 앱에서 다시 시도하고 소유자 계정을 선택해주세요.", status_code=400)
     if not code:
         return RedirectResponse("/login", status_code=302)
     try:
@@ -4633,6 +4644,41 @@ def logout():
     response = RedirectResponse("/login", status_code=302)
     response.delete_cookie(auth.COOKIE_NAME)
     return response
+
+
+@app.post("/api/desktop/start")
+def desktop_start(body: dict = Body(...)):
+    from app import desktop_auth
+    try:
+        url = desktop_auth.start(int(body.get("port", 0)), str(body.get("nonce", "")), str(body.get("challenge", "")))
+        return JSONResponse({"url": url}, headers={"Cache-Control": "no-store"})
+    except (ValueError, TypeError):
+        return JSONResponse({"message": "앱 로그인 요청 또는 서버 설정을 확인해주세요."}, status_code=400)
+
+
+@app.post("/api/desktop/token")
+def desktop_token(body: dict = Body(...)):
+    from app import desktop_auth
+    try:
+        token = desktop_auth.exchange(body.get("code", ""), body.get("verifier", ""))
+        return JSONResponse({"token": token}, headers={"Cache-Control": "no-store"})
+    except ValueError:
+        return JSONResponse({"message": "앱 로그인을 다시 진행해주세요."}, status_code=401)
+
+
+@app.post("/api/desktop/command")
+def desktop_command(request: Request, body: dict = Body(...)):
+    from app import desktop_auth, jarvis
+    user = desktop_auth.owner(request.headers.get("authorization", ""))
+    if not user:
+        return JSONResponse({"ok": False, "message": "앱에서 다시 로그인해주세요."}, status_code=401)
+    text = body.get("text")
+    if not isinstance(text, str) or not text.strip() or len(text) > 250:
+        return JSONResponse({"ok": False, "message": "명령을 1~250자로 입력해주세요."}, status_code=400)
+    try:
+        return JSONResponse(jarvis.command(user, text), headers={"Cache-Control": "no-store"})
+    except (store.StoreError, ValueError):
+        return JSONResponse({"ok": False, "message": "처리 결과를 확인하지 못했어요. 사이트에서 등록 여부를 확인해주세요."}, status_code=400)
 
 
 @app.get("/favs", response_class=HTMLResponse)

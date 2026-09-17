@@ -1,1 +1,37 @@
-{"name":"jarvis-desktop","version":"0.1.0","private":true,"description":"Personal Jarvis desktop companion","author":"Jarvis project","main":"main.cjs","scripts":{"start":"electron .","test":"node --test tests.cjs","pack":"electron-builder --win dir"},"dependencies":{"ws":"8.21.3"},"devDependencies":{"@playwright/test":"^1.63.0","electron":"44.4.1","electron-builder":"26.15.3"},"build":{"appId":"com.oneaigen.jarvis","productName":"Jarvis","files":["*.cjs","*.html","*.css","renderer.js"],"extraResources":[{"from":"extension","to":"extension"}],"win":{"signAndEditExecutable":false},"directories":{"output":"dist"}}}
+{
+  "name": "jarvis-desktop",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Personal Jarvis desktop companion",
+  "author": "Jarvis project",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test tests.cjs account-test.cjs",
+    "pack": "electron-builder --win dir"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "electron": "44.4.1",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.oneaigen.jarvis",
+    "productName": "Jarvis",
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "account.cjs",
+      "logic.cjs",
+      "index.html",
+      "style.css",
+      "renderer.js"
+    ],
+    "win": {
+      "signAndEditExecutable": false
+    },
+    "directories": {
+      "output": "dist"
+    }
+  }
+}
