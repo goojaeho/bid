@@ -24,8 +24,9 @@ def records(email,source,offset=0):
  owner=account() if source=='mail' else email
  offset=int(offset)
  if offset<0:raise ValueError('잘못된 페이지입니다.')
- rows=todos._request('GET',table,params={'select':fields,'email':f'eq.{owner}','order':'id.asc','offset':str(offset),'limit':'25'}).json()
- return {'items':[{'source':source,'id':str(r['id']),'title':r.get('title') or r.get('subject') or r.get('name') or r.get('label') or '기록','text':json.dumps(r,ensure_ascii=False),'url':'https://www.oneaigen.com'+url} for r in rows], 'next':offset+len(rows) if len(rows)==25 else None}
+ page_size=200 if source=='mail' else 25
+ rows=todos._request('GET',table,params={'select':fields,'email':f'eq.{owner}','order':'id.asc','offset':str(offset),'limit':str(page_size)}).json()
+ return {'items':[{'source':source,'id':str(r['id']),'title':r.get('title') or r.get('subject') or r.get('name') or r.get('label') or '기록','text':json.dumps(r,ensure_ascii=False),'url':'https://www.oneaigen.com'+url} for r in rows], 'next':offset+len(rows) if len(rows)==page_size else None}
 
 def event_body(schedule):
  title=str(schedule.get('title') or '').strip()
