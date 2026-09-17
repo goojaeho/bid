@@ -153,6 +153,12 @@ def dispatch(email,op,p):
  if op=='mail.detail':
   acct=account();item=gmail.get_item(acct,int(p['id']))
   return {'ok':True,'item':{**item,**gmail._parse_message(gmail._api(acct,'GET',gmail.GMAIL+'/messages/'+item['gmail_id'],params={'format':'full'}))}}
+ if op=='mail.analysis':
+  acct=account();item=gmail.get_item(acct,int(p['id']));schedule=p.get('schedule') or {}
+  event_body(schedule)
+  clean={k:schedule[k] for k in ('title','date','time','duration_min','location') if k in schedule}
+  todos._request('PATCH','mail_items',params={'email':f'eq.{acct}','id':f"eq.{item['id']}"},json={'schedule':clean,'category':'schedule'})
+  return {'ok':True}
  if op=='mail.trash.preview':
   acct=account();item=gmail.get_item(acct,int(p['id']))
   return {'ok':True,'subject':item['subject'],'token':desktop_auth.seal('mail-trash',{'email':email,'account':acct,'id':item['id'],'gmail_id':item['gmail_id']},600)}
