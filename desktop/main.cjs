@@ -1,10 +1,11 @@
 const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell, safeStorage } = require('electron');
 const { Account } = require('./account.cjs');
+const { Speech } = require('./speech.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { localCommand, validateTts } = require('./logic.cjs');
-let win, tray, account, quitting=false, paused=false, settings={}, pending=false;
+let win, tray, account, speech, quitting=false, paused=false, settings={}, pending=false;
 const page=pathToFileURL(path.join(__dirname,'index.html')).href;
 function state() { return {connected:!!account?.token, paused, ttsUrl:settings.ttsUrl||'', autoStart:app.getLoginItemSettings().openAtLogin}; }
 function emit() { if(win && !win.isDestroyed()) win.webContents.send('state',state()); }
@@ -28,13 +29,21 @@ app.whenReady().then(()=>{
   win.removeMenu();
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   win.webContents.on('will-navigate',event=>event.preventDefault());
-  win.webContents.session.setPermissionRequestHandler((_w,_p,cb)=>cb(false));
+  win.webContents.session.setPermissionRequestHandler((contents,permission,cb,details)=>cb(
+    contents===win.webContents && contents.getURL()===page && permission==='media' &&
+    details.mediaTypes?.includes('audio') && !details.mediaTypes?.includes('video')));
+  win.webContents.session.setPermissionCheckHandler((contents,permission)=>
+    contents===win.webContents && contents.getURL()===page && permission==='media');
+  win.on('hide',()=>win.webContents.send('stop-recording'));
   win.on('close',e=>{if(!quitting){e.preventDefault();win.hide();}});
   win.loadFile('index.html'); win.once('ready-to-show',show);
   const icon=nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAIElEQVQ4T2NkYPj/n4ECwESJ5lEDRg0YNWDUgFEDBgYAAGkCH+F7mVIAAAAASUVORK5CYII=');
   tray=new Tray(icon);tray.setToolTip('자비스 — 클릭해서 열기');tray.on('click',show);menu();
   account=new Account({directory:app.getPath('userData'),crypto:safeStorage,open:url=>shell.openExternal(url),onChange:notice=>{emit();if(notice)win.webContents.send('notice',notice);else show();}});
   account.load();
+  const speechRoot=app.isPackaged?process.resourcesPath:__dirname;
+  try { speech=new Speech(JSON.parse(fs.readFileSync(path.join(speechRoot,'speech-runtime.json'),'utf8')),path.join(speechRoot,'transcribe.py')); } catch {}
+  ipcMain.handle('transcribe',async(e,bytes)=>{check(e);if(!speech)return {error:'음성 인식 환경이 준비되지 않았어요.'};try{return await speech.transcribe(bytes);}catch(error){return {error:error.message};}});
   ipcMain.handle('state',e=>{check(e);return state();});
   ipcMain.handle('login',async e=>{check(e);await account.login();return {ok:true};});
   ipcMain.handle('logout',e=>{check(e);account.logout();return state();});
@@ -68,6 +77,6 @@ app.whenReady().then(()=>{
     return {mime,data:Buffer.concat(chunks).toString('base64')};
   });
 });
-app.on('before-quit',()=>{quitting=true;if(account)account.cancel();});
+app.on('before-quit',()=>{quitting=true;if(account)account.cancel();if(speech)speech.close();});
 app.on('window-all-closed',()=>{});
 }

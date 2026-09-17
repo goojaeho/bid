@@ -1,6 +1,6 @@
 {
   "name": "jarvis-desktop",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Personal Jarvis desktop companion",
   "author": "Jarvis project",
@@ -25,13 +25,25 @@
       "logic.cjs",
       "index.html",
       "style.css",
-      "renderer.js"
+      "renderer.js",
+      "speech.cjs",
+      "recorder.js"
     ],
     "win": {
       "signAndEditExecutable": false
     },
     "directories": {
       "output": "dist"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "transcribe.py",
+        "to": "transcribe.py"
+      },
+      {
+        "from": "speech-runtime.json",
+        "to": "speech-runtime.json"
+      }
+    ]
   }
 }

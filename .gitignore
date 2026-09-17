@@ -6,3 +6,5 @@ __pycache__/
 venv/
 node_modules/
 desktop/dist/
+desktop/speech-runtime.json
+desktop/models/
