@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from app import gmail, todos, store, desktop_auth
 KST=ZoneInfo('Asia/Seoul')
 SOURCES={
- 'meetings':('meetings','id,title,transcript,minutes,created_at','/meetings'),
+ 'meetings':('meetings','id,title,transcript,minutes,created_at','/meeting'),
  'mail':('mail_items',gmail.ITEM_FIELDS,'/mail'),
 }
 def account():
@@ -127,17 +127,24 @@ def dispatch(email,op,p):
  if op=='calendar.preview':return preview(email,p)
  if op=='calendar.commit':return commit(email,p['token'])
  if op=='calendar.verify':
-  acct=account();eid='jarvistest'+secrets.token_hex(16)
-  body={'id':eid,'summary':'자비스 연결 시험 (자동 삭제)','start':{'dateTime':'2036-01-02T03:14:00+09:00'},'end':{'dateTime':'2036-01-02T03:15:00+09:00'},'extendedProperties':{'private':{'jarvis_test':'true'}}}
+  acct=account()
+  proposal=preview(email,{'schedule':{'title':'자비스 연결 시험 (자동 삭제)','date':'2036-01-02','time':'03:14','duration_min':1}})
+  if proposal['conflicts']:raise ValueError('시험 시간에 일정이 있어 검증을 중단했습니다.')
+  token=proposal['token'];eid='jarvis'+hashlib.sha256(token.encode()).hexdigest()[:40]
   try:
-   gmail._api(acct,'POST',gmail.CAL+'/calendars/primary/events',json=body,params={'sendUpdates':'none'})
+   created=commit(email,token)
+   if not created.get('ok'):raise ValueError('시험 일정 등록 실패')
    result=gmail._api(acct,'GET',gmail.CAL+'/calendars/primary/events/'+eid)
    if result.get('id')!=eid:raise ValueError('일정 조회 검증 실패')
+   repeated=commit(email,token)
+   if repeated.get('event',{}).get('id')!=eid:raise ValueError('중복 방지 검증 실패')
+   conflict=overlaps(acct,event_body({'title':'겹침검증','date':'2036-01-02','time':'03:14','duration_min':1}))
+   if not any(x['id']==eid for x in conflict):raise ValueError('충돌 검증 실패')
   finally:
    try:gmail._api(acct,'DELETE',gmail.CAL+'/calendars/primary/events/'+eid,params={'sendUpdates':'none'})
    except gmail.GmailError as exc:
     if str(exc)!='not_found':raise
-  return {'ok':True,'created_read_deleted':True}
+  return {'ok':True,'created_read_deleted':True,'retry_deduplicated':True,'conflict_checked':True}
  if op=='mail.poll':return poll_mail(p.get('cursor',''))
  if op=='mail.detail':
   acct=account();item=gmail.get_item(acct,int(p['id']))
