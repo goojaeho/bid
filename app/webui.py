@@ -52,6 +52,7 @@ PERSONAL_NAV = [
     ("/places", "맛집", "utensils"),
 ]
 OWNER_NAV = [
+    ("/jarvis", "자비스", "mic"),
     ("/reader", "이북 리더", "book-open"),
     ("/genie", "지니", "sparkles"),
     ("/english", "스피킹", "mic"),

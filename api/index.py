@@ -1838,6 +1838,33 @@ def _owner_user(request: Request) -> str | None:
     return user if (user and auth.is_owner(user)) else None
 
 
+@app.get("/jarvis", response_class=HTMLResponse)
+def jarvis_page(request: Request):
+    user = _owner_user(request)
+    if not user:
+        return HTMLResponse("소유자 계정으로 로그인해주세요.", status_code=403)
+    from app.jarvis_ui import CONTENT
+    return layout("자비스", "자비스", "/jarvis", CONTENT, user=user, admin=True)
+
+
+@app.post("/api/jarvis/command")
+def jarvis_command(request: Request, body: dict = Body(...)):
+    user = _owner_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "message": "권한이 없습니다."}, status_code=403)
+    origin = request.headers.get("origin")
+    if origin and origin.rstrip("/") != str(request.base_url).rstrip("/"):
+        return JSONResponse({"ok": False, "message": "허용되지 않은 요청입니다."}, status_code=403)
+    text = body.get("text")
+    if not isinstance(text, str) or not text.strip() or len(text) > 250:
+        return JSONResponse({"ok": False, "message": "명령을 1~250자로 입력해주세요."}, status_code=400)
+    from app import jarvis
+    try:
+        return jarvis.command(user, text)
+    except (store.StoreError, ValueError):
+        return JSONResponse({"ok": False, "message": "저장소 연결 또는 날짜를 확인해주세요. 할 일 화면에서 등록 여부를 확인한 뒤 다시 시도해주세요."}, status_code=400)
+
+
 @app.post("/api/translations/jobs")
 def reader_translation_job(request: Request, body: dict = Body(...)):
     user = _owner_user(request)
