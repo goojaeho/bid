@@ -141,11 +141,14 @@ def dispatch(email,op,p):
    if repeated.get('event',{}).get('id')!=eid:raise ValueError('중복 방지 검증 실패')
    conflict=overlaps(acct,event_body({'title':'겹침검증','date':'2036-01-02','time':'03:14','duration_min':1}))
    if not any(x['id']==eid for x in conflict):raise ValueError('충돌 검증 실패')
+   update=preview(email,{'event_id':eid,'schedule':{'title':'자비스 연결 수정 시험 (자동 삭제)','date':'2036-01-02','time':'03:16','duration_min':1}})
+   changed=commit(email,update['token'])
+   if not changed.get('ok') or '수정 시험' not in changed.get('event',{}).get('summary',''):raise ValueError('수정 검증 실패')
   finally:
    try:gmail._api(acct,'DELETE',gmail.CAL+'/calendars/primary/events/'+eid,params={'sendUpdates':'none'})
    except gmail.GmailError as exc:
     if str(exc)!='not_found':raise
-  return {'ok':True,'created_read_deleted':True,'retry_deduplicated':True,'conflict_checked':True}
+  return {'ok':True,'created_read_deleted':True,'retry_deduplicated':True,'conflict_checked':True,'update_checked':True}
  if op=='mail.poll':return poll_mail(p.get('cursor',''))
  if op=='mail.detail':
   acct=account();item=gmail.get_item(acct,int(p['id']))
