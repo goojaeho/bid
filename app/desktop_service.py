@@ -94,6 +94,32 @@ def commit(email,token):
   data=gmail._api(acct,'POST',gmail.CAL+'/calendars/primary/events',json=body,params={'sendUpdates':'none'})
  return {'ok':True,'event':data,'message':'캘린더에 반영했어요.'}
 
+
+def delete_preview(email,payload):
+ acct=account();eid=str(payload.get('event_id') or '')
+ if not re.fullmatch(r'[a-zA-Z0-9_-]{1,1024}',eid):raise ValueError('잘못된 일정 ID')
+ event=gmail._api(acct,'GET',gmail.CAL+'/calendars/primary/events/'+eid)
+ if event.get('status')=='cancelled':return {'ok':False,'message':'이미 삭제된 일정이에요.'}
+ if event.get('recurrence'):return {'ok':False,'message':'반복 일정은 삭제할 날짜의 한 회차를 조회해서 선택해주세요.'}
+ if event.get('organizer') and not event['organizer'].get('self'):return {'ok':False,'message':'다른 사람이 주최한 일정은 Google 캘린더에서 참석 여부를 변경해주세요.'}
+ if not event.get('etag'):raise ValueError('일정 버전을 확인하지 못했어요.')
+ fields={'email':email,'account':acct,'id':eid,'etag':event['etag']}
+ return {'ok':True,'event':{k:event.get(k) for k in ('id','summary','start','end')},'notify':bool(event.get('attendees')),'token':desktop_auth.seal('calendar-delete',fields,600)}
+
+def delete_commit(email,token):
+ fields=desktop_auth.read(token,'calendar-delete')
+ if fields['email']!=email or fields['account']!=account():raise ValueError('삭제할 일정을 다시 확인해주세요.')
+ acct=fields['account'];eid=fields['id'];url=gmail.CAL+'/calendars/primary/events/'+eid
+ try:
+  current=gmail._api(acct,'GET',url)
+ except gmail.GmailError as exc:
+  if str(exc)=='not_found':return {'ok':True,'deleted_id':eid,'message':'이미 삭제된 일정이에요.'}
+  raise
+ if current.get('status')=='cancelled':return {'ok':True,'deleted_id':eid,'message':'이미 삭제된 일정이에요.'}
+ if current.get('etag')!=fields['etag']:return {'ok':False,'message':'확인 이후 일정이 변경됐어요. 다시 조회하고 삭제해주세요.'}
+ gmail._api(acct,'DELETE',url,headers={'If-Match':fields['etag']},params={'sendUpdates':'all'})
+ return {'ok':True,'deleted_id':eid,'message':'캘린더에서 일정을 삭제했어요.'}
+
 def poll_mail(cursor=""):
  """No paid analysis, no history cursor advancement; retrying cannot lose mail."""
  acct=account()
@@ -127,6 +153,8 @@ def dispatch(email,op,p):
  if op=='calendar.list':return {'ok':True,'items':event_list(account(),p['start'],p['end'])}
  if op=='calendar.preview':return preview(email,p)
  if op=='calendar.commit':return commit(email,p['token'])
+ if op=='calendar.delete.preview':return delete_preview(email,p)
+ if op=='calendar.delete.commit':return delete_commit(email,p['token'])
  if op=='calendar.verify':
   acct=account()
   proposal=preview(email,{'schedule':{'title':'자비스 연결 시험 (자동 삭제)','date':'2036-01-02','time':'03:14','duration_min':1}})
