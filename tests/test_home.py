@@ -725,8 +725,11 @@ class RoutineTest(unittest.TestCase):
              patch.object(todos, "list_todos", return_value=sample), \
              patch.object(routines, "today_view", return_value=view):
             r = self.client.get("/todo", cookies=self.admin_cookie)
-        for marker in ("오늘의 루틴", "운동 30분", "rt-check", "루틴 관리", "🔥 5"):
+        for marker in ("오늘의 루틴", "운동 30분", "rt-check", "루틴 관리",
+                       'class="rt-streak"', '<span class="n">5</span>'):
             self.assertIn(marker, r.text, marker)
+        # 연속일은 이모지가 아니라 사이트 아이콘(flame SVG)으로 표시
+        self.assertNotIn("🔥", r.text)
 
     def test_notify_requires_secret_and_sends(self):
         os.environ["CRON_SECRET"] = "s3cr3t"

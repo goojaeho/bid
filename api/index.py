@@ -1070,12 +1070,12 @@ def _routine_card(view: dict) -> str:
     """오늘의 루틴 체크리스트 (할 일 페이지 상단)."""
     rows = []
     for it in view["items"]:
-        chip = _area_chip({"area": it["area"]})
-        cat = (f'<span class="area-chip" style="background:var(--fill);color:var(--sub)">'
-               f'{esc(it["category"])}</span>' if it["category"] else "")
+        # 할 일 행과 같은 규칙: 영역 아이콘 + (분류 있으면 분류) 칩 하나로 통일
+        chip = _area_chip({"area": it["area"], "category": it["category"]})
         goal = f'<span class="meta" style="margin:0">{esc(it["goal"])}</span>' if it["goal"] else ""
-        streak = (f'<span class="rt-streak" title="연속 {it["streak"]}회">🔥 {it["streak"]}</span>'
-                  if it["streak"] else "")
+        streak = (f'<span class="rt-streak"{"" if it["streak"] else " hidden"} '
+                  f'title="연속 수행"> {icon("flame", 11)}'
+                  f'<span class="n">{it["streak"]}</span></span>')
         week = (f'<span class="meta" style="margin:0">주 {it["week_done"]}/{it["week_planned"]}</span>'
                 if it["week_planned"] > 1 else "")
         li_cls = ' class="rt-done"' if it["done"] else ""
@@ -1085,7 +1085,7 @@ def _routine_card(view: dict) -> str:
             f'<li data-rid="{it["id"]}"{li_cls}>'
             f'<input type="checkbox" class="todo-check rt-check"{checked}>'
             f'<span class="{tt_cls}">{esc(it["title"])}</span>'
-            f'{chip}{cat}{goal}{streak}{week}</li>'
+            f'{chip}{goal}{streak}{week}</li>'
         )
     if not rows:
         rows.append('<li><span class="meta">오늘 예정된 루틴이 없습니다. '
@@ -1106,8 +1106,11 @@ def _routine_card(view: dict) -> str:
 
 
 ROUTINE_JS = """<style>
-  .rt-streak { font-size: 0.78rem; font-weight: 700; color: var(--orange);
+  .rt-streak { display: inline-flex; align-items: center; gap: 2px;
+               font-size: 0.78rem; font-weight: 700; color: var(--orange);
                white-space: nowrap; }
+  .rt-streak[hidden] { display: none; }
+  .rt-streak .ic { vertical-align: 0; }
   .rt-bar { display: inline-block; width: 70px; height: 6px; background: var(--fill);
             border-radius: 3px; vertical-align: middle; margin-left: 6px; overflow: hidden; }
   .rt-bar > span { display: block; height: 6px; background: var(--green); border-radius: 3px; }
@@ -1119,9 +1122,11 @@ ROUTINE_JS = """<style>
                     font-size: 0.82rem; font-weight: 700; cursor: pointer; }
   .wd-pick button.on { background: var(--accent); color: #fff; }
   .rt-row { display: flex; align-items: center; gap: 8px; padding: 8px 2px;
-            border-bottom: 1px solid #f4f5f7; font-size: 0.88rem; }
+            border-bottom: 1px solid #f4f5f7; font-size: 0.88rem; flex-wrap: wrap; }
   .rt-row:last-child { border-bottom: none; }
-  .rt-row .n { flex: 1; min-width: 0; }
+  .rt-row .n { flex: 1; min-width: 120px; }
+  .rt-row input[type=text] { font-size: 0.84rem; padding: 7px 10px; }
+  .rt-row select { font-size: 0.84rem; padding: 7px 10px; min-width: 90px; }
 </style>
 <script>
 (function () {
@@ -1170,11 +1175,11 @@ ROUTINE_JS = """<style>
           var li = list.querySelector('li[data-rid="' + it.id + '"]');
           if (!li) return;
           var s = li.querySelector(".rt-streak");
-          if (it.streak && s) s.textContent = "🔥 " + it.streak;
-          else if (it.streak && !s) {
-            var ns = el("span", "rt-streak", "🔥 " + it.streak);
-            li.appendChild(ns);
-          } else if (!it.streak && s) s.remove();
+          if (s) {
+            s.hidden = !it.streak;
+            var n = s.querySelector(".n");
+            if (n) n.textContent = it.streak;
+          }
         });
       }).catch(function () {});
   }
@@ -1216,14 +1221,7 @@ ROUTINE_JS = """<style>
     title.placeholder = "루틴 이름 (예: 운동 30분)";
     title.maxLength = 100;
     title.style.cssText = "flex:1;min-width:150px";
-    var area = document.createElement("select");
-    ["personal|개인", "work|업무"].forEach(function (o) {
-      var parts = o.split("|");
-      var op = document.createElement("option");
-      op.value = parts[0];
-      op.textContent = parts[1];
-      area.appendChild(op);
-    });
+    var area = areaSelect("personal");
     var cat = el("input", "");
     cat.type = "text";
     cat.placeholder = "분류 (운동·공부)";
@@ -1282,38 +1280,91 @@ ROUTINE_JS = """<style>
         return;
       }
       d.items.forEach(function (rt) {
-        var row = el("div", "rt-row");
-        row.appendChild(el("span", "n", rt.title
-          + (rt.goal ? " · " + rt.goal : "")));
-        row.appendChild(el("span", "meta", rt.weekdays_label));
-        var edit = el("button", "todo-act", "요일 변경");
-        edit.type = "button";
-        edit.addEventListener("click", function () {
-          var p = weekdayPicker(rt.weekdays);
-          var save = el("button", "todo-act", "저장");
-          save.type = "button";
-          save.addEventListener("click", function () {
-            post("/api/routines/" + rt.id + "/update", { weekdays: p.getValue() })
-              .then(function (res) {
-                if (!res.ok) { alert(res.error || "저장 실패"); return; }
-                location.reload();
-              });
-          });
-          row.innerHTML = "";
-          row.appendChild(p);
-          row.appendChild(save);
-        });
-        row.appendChild(edit);
-        var del = el("button", "link-btn", "삭제");
-        del.type = "button";
-        del.addEventListener("click", function () {
-          if (!confirm('"' + rt.title + '" 루틴과 기록을 삭제할까요?')) return;
-          post("/api/routines/" + rt.id + "/delete").then(function () { location.reload(); });
-        });
-        row.appendChild(del);
-        listBox.appendChild(row);
+        listBox.appendChild(routineRow(rt));
       });
     }).catch(function () {});
+  }
+
+  function areaSelect(value) {
+    var sel = document.createElement("select");
+    [["personal", "개인"], ["work", "업무"]].forEach(function (o) {
+      var op = document.createElement("option");
+      op.value = o[0];
+      op.textContent = o[1];
+      if (o[0] === value) op.selected = true;
+      sel.appendChild(op);
+    });
+    return sel;
+  }
+
+  function routineRow(rt) {
+    var row = el("div", "rt-row");
+    showView();
+
+    function showView() {
+      row.innerHTML = "";
+      var name = el("span", "n", rt.title
+        + (rt.category ? " · " + rt.category : "")
+        + (rt.goal ? " · " + rt.goal : ""));
+      row.appendChild(name);
+      row.appendChild(el("span", "meta", rt.weekdays_label));
+      var edit = el("button", "todo-act", "수정");
+      edit.type = "button";
+      edit.addEventListener("click", showEdit);
+      row.appendChild(edit);
+      var del = el("button", "link-btn", "삭제");
+      del.type = "button";
+      del.addEventListener("click", function () {
+        if (!confirm('"' + rt.title + '" 루틴과 기록을 삭제할까요?')) return;
+        post("/api/routines/" + rt.id + "/delete").then(function () { location.reload(); });
+      });
+      row.appendChild(del);
+    }
+
+    function showEdit() {
+      row.innerHTML = "";
+      var title = el("input", "");
+      title.type = "text";
+      title.value = rt.title;
+      title.maxLength = 100;
+      title.placeholder = "루틴 이름";
+      title.style.cssText = "flex:1;min-width:140px";
+      var area = areaSelect(rt.area);
+      var cat = el("input", "");
+      cat.type = "text";
+      cat.value = rt.category || "";
+      cat.placeholder = "분류";
+      cat.style.cssText = "flex:0 1 120px;min-width:90px";
+      var goal = el("input", "");
+      goal.type = "text";
+      goal.value = rt.goal || "";
+      goal.placeholder = "목표";
+      goal.style.cssText = "flex:0 1 100px;min-width:80px";
+      var picker = weekdayPicker(rt.weekdays);
+      var save = el("button", "todo-act", "저장");
+      save.type = "button";
+      save.addEventListener("click", function () {
+        if (!title.value.trim()) { alert("루틴 이름을 입력해주세요."); return; }
+        save.disabled = true;
+        post("/api/routines/" + rt.id + "/update", {
+          title: title.value, area: area.value, category: cat.value,
+          goal: goal.value, weekdays: picker.getValue(),
+        }).then(function (res) {
+          save.disabled = false;
+          if (!res.ok) { alert(res.error || "저장 실패"); return; }
+          location.reload();
+        });
+      });
+      var cancel = el("button", "link-btn", "취소");
+      cancel.type = "button";
+      cancel.addEventListener("click", showView);
+      [title, area, cat, goal, picker, save, cancel].forEach(function (e) {
+        row.appendChild(e);
+      });
+      title.focus();
+    }
+
+    return row;
   }
 })();
 </script>"""
@@ -2901,8 +2952,6 @@ ENGLISH_PAGE_TMPL = """<div class="seg eng-seg" id="eng-tabs">
   .card-row { display: flex; align-items: center; gap: 8px; padding: 7px 2px; border-bottom: 1px solid #f4f5f7; font-size: 0.88rem; }
   .card-row .box-chip { background: var(--accent-soft); color: var(--accent); border-radius: 6px; padding: 2px 7px; font-size: 0.75rem; font-weight: 700; flex-shrink: 0; }
   .card-row .fb { flex: 1; min-width: 0; }
-  .link-btn { border: none; background: none; color: var(--muted); cursor: pointer; padding: 2px 6px; }
-  .link-btn:hover { color: var(--red); }
   @media (max-width: 720px) { .talk-card { height: auto; } .talk-log { height: 50vh; } }
 </style>
 <script>
