@@ -767,5 +767,76 @@ class RoutineTest(unittest.TestCase):
         memo.assert_not_called()
 
 
+    def test_weekly_goal_label_and_streak(self):
+        self.assertEqual(routines.weekdays_label("0123456", 3), "주 3회")
+        today = date(2026, 9, 17)  # 목요일
+        # 이번 주 3회 채움 + 지난주도 3회 → 2주 연속
+        done = {"2026-09-14", "2026-09-15", "2026-09-16",
+                "2026-09-07", "2026-09-09", "2026-09-11"}
+        self.assertEqual(routines.compute_week_streak(done, 3, today), 2)
+        # 이번 주가 아직 미달이어도 지난주 연속은 유지
+        done2 = {"2026-09-14", "2026-09-07", "2026-09-09", "2026-09-11"}
+        self.assertEqual(routines.compute_week_streak(done2, 3, today), 1)
+
+    def test_weekly_goal_view_counts_as_done_when_met(self):
+        thu = date(2026, 9, 17)
+        rows = [{"id": 5, "title": "헬스", "area": "personal", "category": "운동",
+                 "weekdays": "0123456", "weekly_goal": 3, "goal": "", "active": True}]
+        # 월·화·수 3회 완료 → 오늘(목) 체크 없어도 이번 주 목표 달성
+        logs = [{"routine_id": 5, "day": d} for d in
+                ("2026-09-14", "2026-09-15", "2026-09-16")]
+        with patch.object(routines, "list_routines", return_value=rows), \
+             patch.object(routines, "fetch_logs", return_value=logs):
+            view = routines.today_view("e@x.com", day=thu)
+        item = view["items"][0]
+        self.assertFalse(item["done"])          # 오늘은 안 함
+        self.assertTrue(item["goal_met"])       # 주간 목표는 달성
+        self.assertEqual((item["week_done"], item["week_planned"]), (3, 3))
+        self.assertEqual(view["done"], 1)       # 진행률에는 달성으로 반영
+
+    def test_weekly_goal_shows_every_day(self):
+        # 주 N회 루틴은 요일과 무관하게 매일 후보로 뜬다
+        sun = date(2026, 9, 20)
+        rows = [{"id": 5, "title": "러닝", "area": "personal", "category": "",
+                 "weekdays": "0", "weekly_goal": 2, "goal": "", "active": True}]
+        with patch.object(routines, "list_routines", return_value=rows), \
+             patch.object(routines, "fetch_logs", return_value=[]):
+            view = routines.today_view("e@x.com", day=sun)
+        self.assertEqual(len(view["items"]), 1)
+        self.assertEqual(view["items"][0]["streak_text"], "0")
+
+    def test_evening_notify_skips_met_weekly_goal(self):
+        os.environ["CRON_SECRET"] = "s3cr3t"
+        view = {"items": [
+            {"id": 1, "title": "헬스", "area": "personal", "category": "", "goal": "",
+             "weekdays": "0123456", "weekly_goal": 3, "done": False, "goal_met": True,
+             "streak": 1, "streak_text": "1주", "week_done": 3, "week_planned": 3},
+            {"id": 2, "title": "독서", "area": "personal", "category": "", "goal": "",
+             "weekdays": "0123456", "weekly_goal": 0, "done": False, "goal_met": False,
+             "streak": 0, "streak_text": "0", "week_done": 0, "week_planned": 7}],
+            "done": 1, "total": 2, "day": "2026-09-17"}
+        sent = {}
+        with patch.object(routines, "today_view", return_value=view), \
+             patch.object(kakao, "send_memo",
+                          side_effect=lambda text, **kw: sent.update(text=text)):
+            r = self.client.get("/api/routines/notify?slot=evening&key=s3cr3t")
+        self.assertTrue(r.json()["sent"])
+        self.assertIn("독서", sent["text"])
+        self.assertNotIn("헬스", sent["text"])  # 주간 목표 달성분은 제외
+
+    def test_add_api_accepts_weekly_goal(self):
+        captured = {}
+        def fake_add(email, title, area="personal", category="", weekdays="0123456",
+                     goal="", weekly_goal=0):
+            captured.update(weekdays=weekdays, weekly_goal=weekly_goal)
+            return {"id": 1}
+        with patch.object(routines, "add_routine", side_effect=fake_add):
+            r = self.client.post("/api/routines", cookies=self.admin_cookie,
+                                 json={"title": "헬스", "weekly_goal": 3,
+                                       "weekdays": "0123456"})
+        self.assertTrue(r.json()["ok"])
+        self.assertEqual(captured["weekly_goal"], 3)
+
+
 if __name__ == "__main__":
     unittest.main()

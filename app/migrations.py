@@ -207,6 +207,9 @@ MIGRATIONS: list[tuple[int, str]] = [
         );
         create index if not exists routine_logs_email_idx on routine_logs (email, day);
     """),
+    (14, """
+        alter table routines add column if not exists weekly_goal int not null default 0;
+    """),
 ]
 
 _ran = False

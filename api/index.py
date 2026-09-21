@@ -1075,9 +1075,14 @@ def _routine_card(view: dict) -> str:
         goal = f'<span class="meta" style="margin:0">{esc(it["goal"])}</span>' if it["goal"] else ""
         streak = (f'<span class="rt-streak"{"" if it["streak"] else " hidden"} '
                   f'title="연속 수행"> {icon("flame", 11)}'
-                  f'<span class="n">{it["streak"]}</span></span>')
-        week = (f'<span class="meta" style="margin:0">주 {it["week_done"]}/{it["week_planned"]}</span>'
-                if it["week_planned"] > 1 else "")
+                  f'<span class="n">{it.get("streak_text") or it["streak"]}</span></span>')
+        if it.get("weekly_goal"):
+            wk_cls = "rt-week done" if it.get("goal_met") else "rt-week"
+            week = (f'<span class="{wk_cls}" title="이번 주 달성">'
+                    f'주 {it["week_done"]}/{it["week_planned"]}회</span>')
+        else:
+            week = (f'<span class="meta" style="margin:0">주 {it["week_done"]}/{it["week_planned"]}</span>'
+                    if it["week_planned"] > 1 else "")
         li_cls = ' class="rt-done"' if it["done"] else ""
         checked = " checked" if it["done"] else ""
         tt_cls = "tt tdone" if it["done"] else "tt"
@@ -1111,6 +1116,11 @@ ROUTINE_JS = """<style>
                white-space: nowrap; }
   .rt-streak[hidden] { display: none; }
   .rt-streak .ic { vertical-align: 0; }
+  .rt-week { font-size: 0.76rem; font-weight: 700; color: var(--accent);
+             background: var(--accent-soft); border-radius: 6px; padding: 1px 7px;
+             white-space: nowrap; }
+  .rt-week.done { color: var(--green); background: var(--green-soft); }
+  .rt-repeat { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .rt-bar { display: inline-block; width: 70px; height: 6px; background: var(--fill);
             border-radius: 3px; vertical-align: middle; margin-left: 6px; overflow: hidden; }
   .rt-bar > span { display: block; height: 6px; background: var(--green); border-radius: 3px; }
@@ -1178,7 +1188,12 @@ ROUTINE_JS = """<style>
           if (s) {
             s.hidden = !it.streak;
             var n = s.querySelector(".n");
-            if (n) n.textContent = it.streak;
+            if (n) n.textContent = it.streak_text || it.streak;
+          }
+          var wk = li.querySelector(".rt-week");
+          if (wk && it.weekly_goal) {
+            wk.textContent = "주 " + it.week_done + "/" + it.week_planned + "회";
+            wk.classList.toggle("done", !!it.goal_met);
           }
         });
       }).catch(function () {});
@@ -1208,6 +1223,58 @@ ROUTINE_JS = """<style>
     wrap.getValue = function () {
       return Object.keys(picked).filter(function (k) { return picked[k]; }).sort().join("");
     };
+    wrap.setValue = function (days) {
+      picked = {};
+      String(days || "").split("").forEach(function (d) { picked[d] = true; });
+      Array.prototype.forEach.call(wrap.children, function (b, i) {
+        b.classList.toggle("on", !!picked[i]);
+      });
+    };
+    return wrap;
+  }
+
+  // 반복 방식 선택기: [요일 지정] 또는 [주 N회]
+  function repeatPicker(weekdays, weeklyGoal) {
+    var wrap = el("span", "rt-repeat");
+    var mode = document.createElement("select");
+    [["days", "요일 지정"], ["count", "주 N회"]].forEach(function (o) {
+      var op = document.createElement("option");
+      op.value = o[0];
+      op.textContent = o[1];
+      mode.appendChild(op);
+    });
+    mode.value = weeklyGoal > 0 ? "count" : "days";
+    var days = weekdayPicker(weekdays || "0123456");
+    var quick = el("span", "");
+    [["매일", "0123456"], ["평일", "01234"], ["주말", "56"]].forEach(function (q) {
+      var b = el("button", "todo-act", q[0]);
+      b.type = "button";
+      b.style.marginRight = "4px";
+      b.addEventListener("click", function () { days.setValue(q[1]); });
+      quick.appendChild(b);
+    });
+    var count = document.createElement("select");
+    for (var n = 1; n <= 7; n++) {
+      var op = document.createElement("option");
+      op.value = String(n);
+      op.textContent = "주 " + n + "회";
+      count.appendChild(op);
+    }
+    count.value = String(weeklyGoal > 0 ? weeklyGoal : 3);
+    function sync() {
+      var isCount = mode.value === "count";
+      days.style.display = isCount ? "none" : "";
+      quick.style.display = isCount ? "none" : "";
+      count.style.display = isCount ? "" : "none";
+    }
+    mode.addEventListener("change", sync);
+    [mode, days, quick, count].forEach(function (e) { wrap.appendChild(e); });
+    sync();
+    wrap.getValue = function () {
+      return mode.value === "count"
+        ? { weekly_goal: parseInt(count.value, 10), weekdays: "0123456" }
+        : { weekly_goal: 0, weekdays: days.getValue() };
+    };
     return wrap;
   }
 
@@ -1236,29 +1303,17 @@ ROUTINE_JS = """<style>
     r1.appendChild(goal);
     form.appendChild(r1);
     var r2 = el("div", "row");
-    var picker = weekdayPicker("0123456");
-    var quick = el("span", "");
-    [["매일", "0123456"], ["평일", "01234"], ["주말", "56"]].forEach(function (q) {
-      var b = el("button", "todo-act", q[0]);
-      b.type = "button";
-      b.style.marginRight = "4px";
-      b.addEventListener("click", function () {
-        var np = weekdayPicker(q[1]);
-        picker.replaceWith(np);
-        picker = np;
-      });
-      quick.appendChild(b);
-    });
+    var picker = repeatPicker("0123456", 0);
     r2.appendChild(picker);
-    r2.appendChild(quick);
     var add = el("button", "", "루틴 추가");
     add.type = "button";
     add.addEventListener("click", function () {
       if (!title.value.trim()) { alert("루틴 이름을 입력해주세요."); return; }
       add.disabled = true;
+      var rep = picker.getValue();
       post("/api/routines", {
         title: title.value, area: area.value, category: cat.value,
-        goal: goal.value, weekdays: picker.getValue(),
+        goal: goal.value, weekdays: rep.weekdays, weekly_goal: rep.weekly_goal,
       }).then(function (d) {
         add.disabled = false;
         if (!d.ok) { alert(d.error || "추가 실패"); return; }
@@ -1340,15 +1395,16 @@ ROUTINE_JS = """<style>
       goal.value = rt.goal || "";
       goal.placeholder = "목표";
       goal.style.cssText = "flex:0 1 100px;min-width:80px";
-      var picker = weekdayPicker(rt.weekdays);
+      var picker = repeatPicker(rt.weekdays, rt.weekly_goal || 0);
       var save = el("button", "todo-act", "저장");
       save.type = "button";
       save.addEventListener("click", function () {
         if (!title.value.trim()) { alert("루틴 이름을 입력해주세요."); return; }
         save.disabled = true;
+        var rep = picker.getValue();
         post("/api/routines/" + rt.id + "/update", {
           title: title.value, area: area.value, category: cat.value,
-          goal: goal.value, weekdays: picker.getValue(),
+          goal: goal.value, weekdays: rep.weekdays, weekly_goal: rep.weekly_goal,
         }).then(function (res) {
           save.disabled = false;
           if (!res.ok) { alert(res.error || "저장 실패"); return; }
@@ -1547,7 +1603,8 @@ def api_routines_list(request: Request):
     try:
         items = routines.list_routines(user)
         for it in items:
-            it["weekdays_label"] = routines.weekdays_label(it.get("weekdays", ""))
+            it["weekdays_label"] = routines.weekdays_label(
+                it.get("weekdays", ""), it.get("weekly_goal") or 0)
         return {"ok": True, "items": items}
     except store.StoreError as e:
         return {"ok": False, "error": str(e)}
@@ -1564,7 +1621,8 @@ def api_routine_add(request: Request, body: dict = Body(...)):
             area=str(body.get("area") or "personal"),
             category=str(body.get("category") or ""),
             weekdays=body.get("weekdays") or "0123456",
-            goal=str(body.get("goal") or ""))
+            goal=str(body.get("goal") or ""),
+            weekly_goal=body.get("weekly_goal") or 0)
         return {"ok": True, "item": item}
     except store.StoreError as e:
         return {"ok": False, "error": str(e)}
@@ -1642,20 +1700,27 @@ def api_routines_notify(request: Request, slot: str = Query("morning"),
         return {"ok": True, "sent": False, "reason": "오늘 루틴 없음"}
 
     if slot == "evening":
-        left = [i for i in items if not i["done"]]
+        left = [i for i in items if not i["done"] and not i.get("goal_met")]
         if not left:
             return {"ok": True, "sent": False, "reason": "모두 완료"}
-        lines = [f"· {i['title']}" + (f" ({i['goal']})" if i["goal"] else "")
-                 for i in left[:10]]
+        lines = [
+            f"· {i['title']}"
+            + (f" ({i['goal']})" if i["goal"] else "")
+            + (f" [주 {i['week_done']}/{i['week_planned']}회]"
+               if i.get("weekly_goal") else "")
+            for i in left[:10]
+        ]
         text = (f"[루틴] 오늘 {view['done']}/{view['total']} 완료 — 아직 "
                 f"{len(left)}개 남았어요\n" + "\n".join(lines))
     else:
         lines = []
         for i in items[:10]:
-            mark = "✅" if i["done"] else "·"
-            streak = f" 🔥{i['streak']}" if i["streak"] else ""
+            mark = "✅" if (i["done"] or i.get("goal_met")) else "·"
+            streak = f" 🔥{i.get('streak_text') or i['streak']}" if i["streak"] else ""
             goal = f" ({i['goal']})" if i["goal"] else ""
-            lines.append(f"{mark} {i['title']}{goal}{streak}")
+            wk = (f" [주 {i['week_done']}/{i['week_planned']}회]"
+                  if i.get("weekly_goal") else "")
+            lines.append(f"{mark} {i['title']}{goal}{wk}{streak}")
         text = (f"[오늘의 루틴] {len(items)}개\n" + "\n".join(lines))
     try:
         kakao.send_memo(text, link_url=f"{auth.base_url()}/todo",

@@ -15,7 +15,7 @@ from app.store import StoreError
 KST = ZoneInfo("Asia/Seoul")
 WEEKDAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"]
 AREAS = {"work": "업무", "personal": "개인"}
-FIELDS = "id,title,area,category,weekdays,goal,active,created_at"
+FIELDS = "id,title,area,category,weekdays,weekly_goal,goal,active,created_at"
 MAX_STREAK_LOOKBACK = 400  # 연속일 계산 상한 (무한 루프 방지)
 
 
@@ -33,7 +33,9 @@ def _clean_weekdays(raw) -> str:
     return "".join(days) or "0123456"
 
 
-def weekdays_label(weekdays: str) -> str:
+def weekdays_label(weekdays: str, weekly_goal: int = 0) -> str:
+    if weekly_goal:
+        return f"주 {weekly_goal}회"
     days = _clean_weekdays(weekdays)
     if days == "0123456":
         return "매일"
@@ -58,8 +60,18 @@ def list_routines(email: str, include_inactive: bool = False) -> list[dict]:
     return todos._request("GET", "routines", params=params).json()
 
 
+def _clean_goal(raw) -> int:
+    """주 N회 목표 (0 = 요일 지정 방식)."""
+    try:
+        n = int(raw or 0)
+    except (TypeError, ValueError):
+        return 0
+    return n if 1 <= n <= 7 else 0
+
+
 def add_routine(email: str, title: str, area: str = "personal",
-                category: str = "", weekdays="0123456", goal: str = "") -> dict:
+                category: str = "", weekdays="0123456", goal: str = "",
+                weekly_goal=0) -> dict:
     title = (title or "").strip()[:100]
     if not title:
         raise StoreError("루틴 이름이 비어 있습니다.")
@@ -69,6 +81,7 @@ def add_routine(email: str, title: str, area: str = "personal",
         "area": area if area in AREAS else "personal",
         "category": (category or "").strip()[:50],
         "weekdays": _clean_weekdays(weekdays),
+        "weekly_goal": _clean_goal(weekly_goal),
         "goal": (goal or "").strip()[:50],
     }
     resp = todos._request("POST", "routines", json=row,
@@ -88,6 +101,8 @@ def update_routine(email: str, routine_id: int, fields: dict) -> None:
         allowed["category"] = str(fields["category"] or "").strip()[:50]
     if "weekdays" in fields:
         allowed["weekdays"] = _clean_weekdays(fields["weekdays"])
+    if "weekly_goal" in fields:
+        allowed["weekly_goal"] = _clean_goal(fields["weekly_goal"])
     if "goal" in fields:
         allowed["goal"] = str(fields["goal"] or "").strip()[:50]
     if "active" in fields:
@@ -170,11 +185,37 @@ def compute_week(weekdays: str, done_days: set, today: date) -> tuple[int, int]:
     return done, planned
 
 
+def compute_week_streak(done_days: set, weekly_goal: int, today: date) -> int:
+    """주 N회 루틴의 연속 '주' 수. 이번 주가 아직 미달이면 지난주까지로 센다."""
+    if weekly_goal <= 0:
+        return 0
+
+    def count(start: date, end: date) -> int:
+        n = 0
+        d = start
+        while d <= end:
+            if d.isoformat() in done_days:
+                n += 1
+            d += timedelta(days=1)
+        return n
+
+    start = today - timedelta(days=today.weekday())
+    streak = 1 if count(start, today) >= weekly_goal else 0
+    start -= timedelta(days=7)
+    for _ in range(52):
+        if count(start, start + timedelta(days=6)) >= weekly_goal:
+            streak += 1
+            start -= timedelta(days=7)
+        else:
+            break
+    return streak
+
+
 def today_view(email: str, day: date | None = None) -> dict:
     """오늘 해야 할 루틴 + 완료 여부 + 연속일. 화면·알림 공용."""
     day = day or today_kst()
-    routines = list_routines(email)
-    if not routines:
+    routines_rows = list_routines(email)
+    if not routines_rows:
         return {"items": [], "done": 0, "total": 0, "day": day.isoformat()}
     logs = fetch_logs(email, day - timedelta(days=MAX_STREAK_LOOKBACK), day)
     by_routine: dict[int, set] = {}
@@ -182,25 +223,41 @@ def today_view(email: str, day: date | None = None) -> dict:
         by_routine.setdefault(row["routine_id"], set()).add(row["day"])
 
     items = []
-    for r in routines:
-        if not runs_on(r.get("weekdays", "0123456"), day):
+    for r in routines_rows:
+        wk_goal = int(r.get("weekly_goal") or 0)
+        weekdays = r.get("weekdays", "0123456")
+        # 주 N회 루틴은 매일 후보로 띄우고 주간 달성으로 판단한다
+        if not wk_goal and not runs_on(weekdays, day):
             continue
         done_days = by_routine.get(r["id"], set())
-        week_done, week_planned = compute_week(r.get("weekdays", "0123456"),
-                                               done_days, day)
+        if wk_goal:
+            week_done, week_planned = compute_week(
+                "0123456", done_days, day)[0], wk_goal
+            streak = compute_week_streak(done_days, wk_goal, day)
+            streak_text = f"{streak}주" if streak else "0"
+        else:
+            week_done, week_planned = compute_week(weekdays, done_days, day)
+            streak = compute_streak(weekdays, done_days, day)
+            streak_text = str(streak)
+        today_done = day.isoformat() in done_days
+        goal_met = bool(wk_goal) and week_done >= wk_goal
         items.append({
             "id": r["id"],
             "title": r["title"],
             "area": r.get("area", "personal"),
             "category": r.get("category", ""),
             "goal": r.get("goal", ""),
-            "weekdays": r.get("weekdays", "0123456"),
-            "done": day.isoformat() in done_days,
-            "streak": compute_streak(r.get("weekdays", "0123456"), done_days, day),
+            "weekdays": weekdays,
+            "weekly_goal": wk_goal,
+            "done": today_done,
+            "goal_met": goal_met,
+            "streak": streak,
+            "streak_text": streak_text,
             "week_done": week_done,
             "week_planned": week_planned,
         })
-    done_count = sum(1 for i in items if i["done"])
+    # 주 N회는 이번 주 목표를 채웠으면 오늘 안 해도 달성으로 본다
+    done_count = sum(1 for i in items if i["done"] or i["goal_met"])
     return {"items": items, "done": done_count, "total": len(items),
             "day": day.isoformat()}
 
