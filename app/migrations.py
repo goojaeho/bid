@@ -185,6 +185,28 @@ MIGRATIONS: list[tuple[int, str]] = [
         );
         create index if not exists places_email_idx on places (email, status);
     """),
+    (13, """
+        create table if not exists routines (
+          id bigint generated always as identity primary key,
+          email text not null,
+          title text not null,
+          area text not null default 'personal',
+          category text not null default '',
+          weekdays text not null default '0123456',
+          goal text not null default '',
+          active boolean not null default true,
+          created_at timestamptz not null default now()
+        );
+        create index if not exists routines_email_idx on routines (email, active);
+        create table if not exists routine_logs (
+          routine_id bigint not null,
+          day date not null,
+          email text not null,
+          created_at timestamptz not null default now(),
+          primary key (routine_id, day)
+        );
+        create index if not exists routine_logs_email_idx on routine_logs (email, day);
+    """),
 ]
 
 _ran = False

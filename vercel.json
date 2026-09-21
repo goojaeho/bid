@@ -1,3 +1,7 @@
 {
-  "regions": ["icn1"]
+  "regions": ["icn1"],
+  "crons": [
+    { "path": "/api/routines/notify?slot=morning", "schedule": "0 23 * * *" },
+    { "path": "/api/routines/notify?slot=evening", "schedule": "0 12 * * *" }
+  ]
 }

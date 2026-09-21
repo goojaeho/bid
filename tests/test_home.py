@@ -9,8 +9,8 @@ os.environ["G2B_SERVICE_KEY"] = "dummy"
 from fastapi.testclient import TestClient
 
 import api.index as web
-from app import (auth, english, genie, gmail, meetings, places, searches,
-                 summarize, todos)
+from app import (auth, english, genie, gmail, kakao, meetings, places,
+                 routines, searches, summarize, todos)
 from app.store import StoreError
 
 KST = ZoneInfo("Asia/Seoul")
@@ -630,6 +630,138 @@ class PlacesTest(unittest.TestCase):
         with patch.object(todos, "_request"):
             with self.assertRaises(StoreError):
                 places.add_place("e@x.com", {"name": "  "})
+
+
+class RoutineTest(unittest.TestCase):
+    """매일 반복 루틴 — 요일 규칙·연속일 계산·체크 API."""
+
+    def setUp(self):
+        os.environ["GOOGLE_CLIENT_ID"] = "cid"
+        os.environ["GOOGLE_CLIENT_SECRET"] = "sec"
+        os.environ["ADMIN_EMAILS"] = "boss@company.com"
+        self.client = TestClient(web.app)
+        self.admin_cookie = {auth.COOKIE_NAME: auth.make_session("boss@company.com")}
+        self.user_cookie = {auth.COOKIE_NAME: auth.make_session("guest@gmail.com")}
+
+    def tearDown(self):
+        for k in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "ADMIN_EMAILS",
+                  "CRON_SECRET", "MAIL_PUSH_SECRET"):
+            os.environ.pop(k, None)
+
+    def test_weekday_rules(self):
+        self.assertEqual(routines.weekdays_label("0123456"), "매일")
+        self.assertEqual(routines.weekdays_label("01234"), "평일")
+        self.assertEqual(routines.weekdays_label("024"), "월·수·금")
+        wed = date(2026, 9, 16)  # 수요일
+        self.assertTrue(routines.runs_on("024", wed))
+        self.assertFalse(routines.runs_on("13", wed))
+
+    def test_streak_daily(self):
+        today = date(2026, 9, 17)
+        done = {"2026-09-17", "2026-09-16", "2026-09-15"}
+        self.assertEqual(routines.compute_streak("0123456", done, today), 3)
+        # 오늘 아직 안 했어도 어제까지 연속은 유지
+        done2 = {"2026-09-16", "2026-09-15"}
+        self.assertEqual(routines.compute_streak("0123456", done2, today), 2)
+        # 어제 빠뜨렸으면 0
+        self.assertEqual(routines.compute_streak("0123456", {"2026-09-10"}, today), 0)
+
+    def test_streak_skips_offdays(self):
+        # 월·수·금 루틴: 목요일 기준으로 수·월을 연속 수행했으면 2
+        thu = date(2026, 9, 17)
+        done = {"2026-09-16", "2026-09-14"}  # 수, 월
+        self.assertEqual(routines.compute_streak("024", done, thu), 2)
+
+    def test_week_progress(self):
+        today = date(2026, 9, 17)  # 목요일
+        done = {"2026-09-14", "2026-09-16"}
+        self.assertEqual(routines.compute_week("0123456", done, today), (2, 4))
+
+    def test_today_view_filters_and_counts(self):
+        wed = date(2026, 9, 16)
+        rows = [
+            {"id": 1, "title": "운동", "area": "personal", "category": "운동",
+             "weekdays": "0123456", "goal": "30분", "active": True},
+            {"id": 2, "title": "헬스", "area": "personal", "category": "운동",
+             "weekdays": "024", "goal": "", "active": True},
+            {"id": 3, "title": "주간회고", "area": "work", "category": "",
+             "weekdays": "4", "goal": "", "active": True},  # 금요일만
+        ]
+        logs = [{"routine_id": 1, "day": "2026-09-16"}]
+        with patch.object(routines, "list_routines", return_value=rows), \
+             patch.object(routines, "fetch_logs", return_value=logs):
+            view = routines.today_view("e@x.com", day=wed)
+        titles = [i["title"] for i in view["items"]]
+        self.assertEqual(titles, ["운동", "헬스"])  # 금요일 루틴은 제외
+        self.assertEqual((view["done"], view["total"]), (1, 2))
+
+    def test_non_admin_blocked(self):
+        r = self.client.get("/api/routines/today", cookies=self.user_cookie)
+        self.assertFalse(r.json()["ok"])
+        r = self.client.post("/api/routines", cookies=self.user_cookie,
+                             json={"title": "x"})
+        self.assertFalse(r.json()["ok"])
+
+    def test_check_api_records_today(self):
+        captured = {}
+        with patch.object(routines, "set_log",
+                          side_effect=lambda e, i, d, done: captured.update(
+                              email=e, rid=i, day=d, done=done)):
+            r = self.client.post("/api/routines/7/check", cookies=self.admin_cookie,
+                                 json={"done": True})
+        self.assertTrue(r.json()["ok"])
+        self.assertEqual(captured["rid"], 7)
+        self.assertTrue(captured["done"])
+        self.assertEqual(captured["day"], routines.today_kst())
+
+    def test_todo_page_shows_routine_card(self):
+        view = {"items": [{"id": 1, "title": "운동 30분", "area": "personal",
+                           "category": "운동", "goal": "30분", "weekdays": "0123456",
+                           "done": False, "streak": 5, "week_done": 2,
+                           "week_planned": 4}],
+                "done": 0, "total": 1, "day": "2026-09-17"}
+        sample = {"pending": [], "done": []}
+        with patch.object(todos, "enabled", return_value=True), \
+             patch.object(todos, "list_todos", return_value=sample), \
+             patch.object(routines, "today_view", return_value=view):
+            r = self.client.get("/todo", cookies=self.admin_cookie)
+        for marker in ("오늘의 루틴", "운동 30분", "rt-check", "루틴 관리", "🔥 5"):
+            self.assertIn(marker, r.text, marker)
+
+    def test_notify_requires_secret_and_sends(self):
+        os.environ["CRON_SECRET"] = "s3cr3t"
+        r = self.client.get("/api/routines/notify?slot=morning&key=wrong")
+        self.assertFalse(r.json()["ok"])
+
+        view = {"items": [
+            {"id": 1, "title": "운동", "area": "personal", "category": "",
+             "goal": "30분", "weekdays": "0123456", "done": True, "streak": 3,
+             "week_done": 1, "week_planned": 7},
+            {"id": 2, "title": "독서", "area": "personal", "category": "",
+             "goal": "", "weekdays": "0123456", "done": False, "streak": 0,
+             "week_done": 0, "week_planned": 7}],
+            "done": 1, "total": 2, "day": "2026-09-17"}
+        sent = {}
+        with patch.object(routines, "today_view", return_value=view), \
+             patch.object(kakao, "send_memo",
+                          side_effect=lambda text, **kw: sent.update(text=text)):
+            r = self.client.get("/api/routines/notify?slot=evening&key=s3cr3t")
+        self.assertTrue(r.json()["sent"])
+        self.assertIn("독서", sent["text"])      # 미완료만
+        self.assertNotIn("운동", sent["text"])   # 완료한 건 제외
+
+    def test_notify_skips_when_all_done(self):
+        os.environ["CRON_SECRET"] = "s3cr3t"
+        view = {"items": [{"id": 1, "title": "운동", "area": "personal",
+                           "category": "", "goal": "", "weekdays": "0123456",
+                           "done": True, "streak": 1, "week_done": 1,
+                           "week_planned": 7}],
+                "done": 1, "total": 1, "day": "2026-09-17"}
+        with patch.object(routines, "today_view", return_value=view), \
+             patch.object(kakao, "send_memo") as memo:
+            r = self.client.get("/api/routines/notify?slot=evening&key=s3cr3t")
+        self.assertFalse(r.json()["sent"])
+        memo.assert_not_called()
 
 
 if __name__ == "__main__":

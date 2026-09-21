@@ -26,7 +26,7 @@ from fastapi.responses import RedirectResponse
 from fastapi import Body
 
 from app import (auth, english, genie, gmail, gov_sources, kakao, meetings,
-                 migrations, places, searches, store, summarize, todos)
+                 migrations, places, routines, searches, store, summarize, todos)
 from app.g2b_client import CATEGORIES, G2BApiError, G2BClient
 from app.webui import icon, layout
 
@@ -916,7 +916,7 @@ def _todo_tree_rows(items: list[dict], all_pending: list[dict], today_iso: str) 
     return "".join(rows)
 
 
-def _home_content(data: dict, st: dict) -> str:
+def _home_content(data: dict, st: dict, email: str = "") -> str:
     """메인 대시보드: 통계 타일 + 업무/개인 누적 차트 + 오늘 할 일 요약."""
     today_iso = datetime.now(KST).date().isoformat()
     tiles = "".join([
@@ -997,7 +997,26 @@ def _home_content(data: dict, st: dict) -> str:
                 )
     except Exception:
         pass
-    return f'<div class="stat-row">{tiles}</div>{mail_card}{today_card}{chart}{TODO_JS}'
+    routine_line = ""
+    try:
+        rc = routines.counts(email) if email else {"total": 0}
+        if rc.get("total"):
+            pct = int(100 * rc["done"] / rc["total"])
+            routine_line = (
+                '<div class="card"><div class="row" style="justify-content:space-between">'
+                f'<span style="font-size:0.92rem">{icon("list-checks", 15)} 오늘의 루틴 '
+                f'<b>{rc["done"]}/{rc["total"]}</b>'
+                f'<span class="rt-bar" style="display:inline-block;width:70px;height:6px;'
+                'background:var(--fill);border-radius:3px;vertical-align:middle;margin-left:8px;'
+                f'overflow:hidden"><span style="display:block;height:6px;width:{pct}%;'
+                'background:var(--green);border-radius:3px"></span></span></span>'
+                '<a href="/todo" style="font-size:0.84rem;font-weight:700">체크하러 가기 →</a>'
+                "</div></div>"
+            )
+    except Exception:
+        pass
+    return (f'<div class="stat-row">{tiles}</div>{routine_line}{mail_card}'
+            f"{today_card}{chart}{TODO_JS}")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1022,7 +1041,7 @@ def home(request: Request):
             rows_f = pool.submit(todos.stats_rows, user)
             data = data_f.result()
             st = todos.compute_stats(rows_f.result(), len(data["pending"]))
-        content = _home_content(data, st)
+        content = _home_content(data, st, email=user)
     except store.StoreError as e:
         content = (f'<div class="card"><p class="error">{esc(str(e))}</p>'
                    '<p class="meta">Supabase SQL Editor에서 todos 테이블을 만들었는지 확인하세요.</p></div>')
@@ -1045,6 +1064,259 @@ def _seg(base: str, options: dict, current: str, keep: dict) -> str:
         on = ' class="on"' if value == current else ""
         links.append(f'<a href="/todo?{qs}"{on}>{label}</a>')
     return f'<div class="seg">{"".join(links)}</div>'
+
+
+def _routine_card(view: dict) -> str:
+    """오늘의 루틴 체크리스트 (할 일 페이지 상단)."""
+    rows = []
+    for it in view["items"]:
+        chip = _area_chip({"area": it["area"]})
+        cat = (f'<span class="area-chip" style="background:var(--fill);color:var(--sub)">'
+               f'{esc(it["category"])}</span>' if it["category"] else "")
+        goal = f'<span class="meta" style="margin:0">{esc(it["goal"])}</span>' if it["goal"] else ""
+        streak = (f'<span class="rt-streak" title="연속 {it["streak"]}회">🔥 {it["streak"]}</span>'
+                  if it["streak"] else "")
+        week = (f'<span class="meta" style="margin:0">주 {it["week_done"]}/{it["week_planned"]}</span>'
+                if it["week_planned"] > 1 else "")
+        li_cls = ' class="rt-done"' if it["done"] else ""
+        checked = " checked" if it["done"] else ""
+        tt_cls = "tt tdone" if it["done"] else "tt"
+        rows.append(
+            f'<li data-rid="{it["id"]}"{li_cls}>'
+            f'<input type="checkbox" class="todo-check rt-check"{checked}>'
+            f'<span class="{tt_cls}">{esc(it["title"])}</span>'
+            f'{chip}{cat}{goal}{streak}{week}</li>'
+        )
+    if not rows:
+        rows.append('<li><span class="meta">오늘 예정된 루틴이 없습니다. '
+                    '[루틴 관리]에서 추가해보세요.</span></li>')
+    pct = int(100 * view["done"] / view["total"]) if view["total"] else 0
+    bar = (f'<span class="rt-bar"><span style="width:{pct}%"></span></span>'
+           if view["total"] else "")
+    return f"""<div class="card" id="rt-card">
+  <div class="row" style="justify-content:space-between">
+    <b style="font-size:0.92rem">오늘의 루틴
+      <span id="rt-count" class="meta" style="margin:0">{view["done"]}/{view["total"]}</span>
+      {bar}</b>
+    <button type="button" id="rt-manage" class="todo-act">루틴 관리</button>
+  </div>
+  <ul class="todo-list" id="rt-list" style="margin-top:6px">{"".join(rows)}</ul>
+  <div id="rt-panel" hidden></div>
+</div>"""
+
+
+ROUTINE_JS = """<style>
+  .rt-streak { font-size: 0.78rem; font-weight: 700; color: var(--orange);
+               white-space: nowrap; }
+  .rt-bar { display: inline-block; width: 70px; height: 6px; background: var(--fill);
+            border-radius: 3px; vertical-align: middle; margin-left: 6px; overflow: hidden; }
+  .rt-bar > span { display: block; height: 6px; background: var(--green); border-radius: 3px; }
+  #rt-list li.rt-done .tt { color: var(--muted); text-decoration: line-through; }
+  #rt-panel { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 12px; }
+  .wd-pick { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+  .wd-pick button { background: var(--fill); border: none; color: var(--sub);
+                    border-radius: 8px; width: 34px; height: 32px; padding: 0;
+                    font-size: 0.82rem; font-weight: 700; cursor: pointer; }
+  .wd-pick button.on { background: var(--accent); color: #fff; }
+  .rt-row { display: flex; align-items: center; gap: 8px; padding: 8px 2px;
+            border-bottom: 1px solid #f4f5f7; font-size: 0.88rem; }
+  .rt-row:last-child { border-bottom: none; }
+  .rt-row .n { flex: 1; min-width: 0; }
+</style>
+<script>
+(function () {
+  var list = document.getElementById("rt-list");
+  if (!list) return;
+  var panel = document.getElementById("rt-panel");
+  var WD = ["월", "화", "수", "목", "금", "토", "일"];
+
+  function post(url, body) {
+    return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(body || {}) }).then(function (r) { return r.json(); });
+  }
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  // ---------- 오늘 체크
+  list.addEventListener("change", function (e) {
+    var box = e.target.closest(".rt-check");
+    if (!box) return;
+    var li = box.closest("li[data-rid]");
+    if (!li) return;
+    var done = box.checked;
+    li.classList.toggle("rt-done", done);
+    var tt = li.querySelector(".tt");
+    if (tt) tt.classList.toggle("tdone", done);
+    post("/api/routines/" + li.dataset.rid + "/check", { done: done })
+      .then(function (d) {
+        if (!d.ok) { alert(d.error || "저장 실패"); box.checked = !done; return; }
+        refreshToday();
+      });
+  });
+
+  function refreshToday() {
+    fetch("/api/routines/today").then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) return;
+        var c = document.getElementById("rt-count");
+        if (c) c.textContent = d.view.done + "/" + d.view.total;
+        var bar = document.querySelector(".rt-bar > span");
+        if (bar) bar.style.width = (d.view.total ? Math.round(100 * d.view.done / d.view.total) : 0) + "%";
+        d.view.items.forEach(function (it) {
+          var li = list.querySelector('li[data-rid="' + it.id + '"]');
+          if (!li) return;
+          var s = li.querySelector(".rt-streak");
+          if (it.streak && s) s.textContent = "🔥 " + it.streak;
+          else if (it.streak && !s) {
+            var ns = el("span", "rt-streak", "🔥 " + it.streak);
+            li.appendChild(ns);
+          } else if (!it.streak && s) s.remove();
+        });
+      }).catch(function () {});
+  }
+
+  // ---------- 루틴 관리
+  var open = false;
+  document.getElementById("rt-manage").addEventListener("click", function () {
+    open = !open;
+    panel.hidden = !open;
+    if (open) renderPanel();
+  });
+
+  function weekdayPicker(initial) {
+    var wrap = el("span", "wd-pick");
+    var picked = {};
+    String(initial || "0123456").split("").forEach(function (d) { picked[d] = true; });
+    WD.forEach(function (label, i) {
+      var b = el("button", picked[i] ? "on" : "", label);
+      b.type = "button";
+      b.addEventListener("click", function () {
+        picked[i] = !picked[i];
+        b.classList.toggle("on", !!picked[i]);
+      });
+      wrap.appendChild(b);
+    });
+    wrap.getValue = function () {
+      return Object.keys(picked).filter(function (k) { return picked[k]; }).sort().join("");
+    };
+    return wrap;
+  }
+
+  function renderPanel() {
+    panel.innerHTML = "";
+    // 추가 폼
+    var form = el("div", "");
+    var r1 = el("div", "row");
+    var title = el("input", "");
+    title.type = "text";
+    title.placeholder = "루틴 이름 (예: 운동 30분)";
+    title.maxLength = 100;
+    title.style.cssText = "flex:1;min-width:150px";
+    var area = document.createElement("select");
+    ["personal|개인", "work|업무"].forEach(function (o) {
+      var parts = o.split("|");
+      var op = document.createElement("option");
+      op.value = parts[0];
+      op.textContent = parts[1];
+      area.appendChild(op);
+    });
+    var cat = el("input", "");
+    cat.type = "text";
+    cat.placeholder = "분류 (운동·공부)";
+    cat.style.cssText = "flex:0 1 150px;min-width:110px";
+    var goal = el("input", "");
+    goal.type = "text";
+    goal.placeholder = "목표 (30분)";
+    goal.style.cssText = "flex:0 1 120px;min-width:90px";
+    r1.appendChild(title);
+    r1.appendChild(area);
+    r1.appendChild(cat);
+    r1.appendChild(goal);
+    form.appendChild(r1);
+    var r2 = el("div", "row");
+    var picker = weekdayPicker("0123456");
+    var quick = el("span", "");
+    [["매일", "0123456"], ["평일", "01234"], ["주말", "56"]].forEach(function (q) {
+      var b = el("button", "todo-act", q[0]);
+      b.type = "button";
+      b.style.marginRight = "4px";
+      b.addEventListener("click", function () {
+        var np = weekdayPicker(q[1]);
+        picker.replaceWith(np);
+        picker = np;
+      });
+      quick.appendChild(b);
+    });
+    r2.appendChild(picker);
+    r2.appendChild(quick);
+    var add = el("button", "", "루틴 추가");
+    add.type = "button";
+    add.addEventListener("click", function () {
+      if (!title.value.trim()) { alert("루틴 이름을 입력해주세요."); return; }
+      add.disabled = true;
+      post("/api/routines", {
+        title: title.value, area: area.value, category: cat.value,
+        goal: goal.value, weekdays: picker.getValue(),
+      }).then(function (d) {
+        add.disabled = false;
+        if (!d.ok) { alert(d.error || "추가 실패"); return; }
+        location.reload();
+      });
+    });
+    r2.appendChild(add);
+    form.appendChild(r2);
+    panel.appendChild(form);
+
+    // 전체 목록
+    var listBox = el("div", "");
+    listBox.style.marginTop = "10px";
+    panel.appendChild(listBox);
+    fetch("/api/routines").then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.ok) { listBox.textContent = d.error || "오류"; return; }
+      if (!d.items.length) {
+        listBox.appendChild(el("p", "meta", "등록된 루틴이 없습니다."));
+        return;
+      }
+      d.items.forEach(function (rt) {
+        var row = el("div", "rt-row");
+        row.appendChild(el("span", "n", rt.title
+          + (rt.goal ? " · " + rt.goal : "")));
+        row.appendChild(el("span", "meta", rt.weekdays_label));
+        var edit = el("button", "todo-act", "요일 변경");
+        edit.type = "button";
+        edit.addEventListener("click", function () {
+          var p = weekdayPicker(rt.weekdays);
+          var save = el("button", "todo-act", "저장");
+          save.type = "button";
+          save.addEventListener("click", function () {
+            post("/api/routines/" + rt.id + "/update", { weekdays: p.getValue() })
+              .then(function (res) {
+                if (!res.ok) { alert(res.error || "저장 실패"); return; }
+                location.reload();
+              });
+          });
+          row.innerHTML = "";
+          row.appendChild(p);
+          row.appendChild(save);
+        });
+        row.appendChild(edit);
+        var del = el("button", "link-btn", "삭제");
+        del.type = "button";
+        del.addEventListener("click", function () {
+          if (!confirm('"' + rt.title + '" 루틴과 기록을 삭제할까요?')) return;
+          post("/api/routines/" + rt.id + "/delete").then(function () { location.reload(); });
+        });
+        row.appendChild(del);
+        listBox.appendChild(row);
+      });
+    }).catch(function () {});
+  }
+})();
+</script>"""
 
 
 @app.get("/todo", response_class=HTMLResponse)
@@ -1082,6 +1354,17 @@ def todo_page(request: Request, area: str = Query(""), view: str = Query("all"))
 
     area_seg = _seg("area", TODO_AREA_TABS, area, {"view": view})
     view_seg = _seg("view", view_labels, view, {"area": area})
+
+    try:  # 루틴 조회 실패가 할 일 화면을 막지 않도록
+        rt_view = routines.today_view(user)
+        if area:
+            rt_view = dict(rt_view, items=[i for i in rt_view["items"]
+                                           if i["area"] == area])
+            rt_view["total"] = len(rt_view["items"])
+            rt_view["done"] = sum(1 for i in rt_view["items"] if i["done"])
+        routine_card = _routine_card(rt_view)
+    except store.StoreError:
+        routine_card = ""
 
     default_area = area or "work"
     form = f"""<form id="todo-form" class="card">
@@ -1132,7 +1415,7 @@ def todo_page(request: Request, area: str = Query(""), view: str = Query("all"))
         body = f'<div class="card"><ul class="todo-list">{rows}</ul></div>'
 
     content = (f'<div class="row" style="margin-bottom:12px;justify-content:space-between">'
-               f"{area_seg}{view_seg}</div>{form}{body}{TODO_JS}")
+               f"{area_seg}{view_seg}</div>{form}{routine_card}{body}{TODO_JS}{ROUTINE_JS}")
     return layout("할 일 관리", icon("list-checks", 20) + " 할 일", "/todo", content, user=user, admin=True)
 
 
@@ -1190,6 +1473,145 @@ def api_todo_delete(request: Request, todo_id: int):
         return {"ok": True}
     except store.StoreError as e:
         return {"ok": False, "error": str(e)}
+
+
+# ------------------------------------------------- 루틴 (매일 반복 항목)
+
+@app.get("/api/routines/today")
+def api_routines_today(request: Request):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        return {"ok": True, "view": routines.today_view(user)}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/routines")
+def api_routines_list(request: Request):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        items = routines.list_routines(user)
+        for it in items:
+            it["weekdays_label"] = routines.weekdays_label(it.get("weekdays", ""))
+        return {"ok": True, "items": items}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/routines")
+def api_routine_add(request: Request, body: dict = Body(...)):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        item = routines.add_routine(
+            user, str(body.get("title") or ""),
+            area=str(body.get("area") or "personal"),
+            category=str(body.get("category") or ""),
+            weekdays=body.get("weekdays") or "0123456",
+            goal=str(body.get("goal") or ""))
+        return {"ok": True, "item": item}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/routines/{routine_id}/update")
+def api_routine_update(request: Request, routine_id: int, body: dict = Body(...)):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        routines.update_routine(user, routine_id, body)
+        return {"ok": True}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/routines/{routine_id}/delete")
+def api_routine_delete(request: Request, routine_id: int):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        routines.delete_routine(user, routine_id)
+        return {"ok": True}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/routines/{routine_id}/check")
+def api_routine_check(request: Request, routine_id: int, body: dict = Body(...)):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        routines.set_log(user, routine_id, routines.today_kst(),
+                         bool(body.get("done")))
+        return {"ok": True}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _owner_email() -> str:
+    """알림 대상 계정 (OWNER_EMAIL 또는 ADMIN_EMAILS 첫 번째)."""
+    owner = os.environ.get("OWNER_EMAIL", "").strip()
+    if owner:
+        return owner
+    admins = [e.strip() for e in os.environ.get("ADMIN_EMAILS", "").split(",")
+              if e.strip()]
+    return admins[0] if admins else ""
+
+
+@app.get("/api/routines/notify")
+@app.post("/api/routines/notify")
+def api_routines_notify(request: Request, slot: str = Query("morning"),
+                        key: str = Query("")):
+    """Vercel Cron에서 호출 — 아침 루틴 안내 / 저녁 미완료 리마인드."""
+    # Vercel Cron은 CRON_SECRET이 설정돼 있으면 Bearer 헤더를 붙여 호출한다.
+    # (미설정 시에는 x-vercel-cron 헤더로 식별 — 카톡 발송만 하는 저위험 엔드포인트)
+    secret = os.environ.get("CRON_SECRET", "").strip()
+    if secret:
+        auth_header = request.headers.get("authorization", "")
+        from_vercel = request.headers.get("x-vercel-cron", "")
+        if key != secret and auth_header != f"Bearer {secret}" and not from_vercel:
+            return {"ok": False, "error": "권한이 없습니다."}
+    email = _owner_email()
+    if not email:
+        return {"ok": False, "error": "ADMIN_EMAILS가 설정되지 않았습니다."}
+    try:
+        view = routines.today_view(email)
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+    items = view["items"]
+    if not items:
+        return {"ok": True, "sent": False, "reason": "오늘 루틴 없음"}
+
+    if slot == "evening":
+        left = [i for i in items if not i["done"]]
+        if not left:
+            return {"ok": True, "sent": False, "reason": "모두 완료"}
+        lines = [f"· {i['title']}" + (f" ({i['goal']})" if i["goal"] else "")
+                 for i in left[:10]]
+        text = (f"[루틴] 오늘 {view['done']}/{view['total']} 완료 — 아직 "
+                f"{len(left)}개 남았어요\n" + "\n".join(lines))
+    else:
+        lines = []
+        for i in items[:10]:
+            mark = "✅" if i["done"] else "·"
+            streak = f" 🔥{i['streak']}" if i["streak"] else ""
+            goal = f" ({i['goal']})" if i["goal"] else ""
+            lines.append(f"{mark} {i['title']}{goal}{streak}")
+        text = (f"[오늘의 루틴] {len(items)}개\n" + "\n".join(lines))
+    try:
+        kakao.send_memo(text, link_url=f"{auth.base_url()}/todo",
+                        button="루틴 체크하기")
+        return {"ok": True, "sent": True, "count": len(items)}
+    except Exception as e:  # 카카오 토큰 만료 등 — 크론이 죽지 않게
+        return {"ok": False, "error": str(e)[:200]}
 
 
 PDF_PAGE = """<div class="pdf-studio">
