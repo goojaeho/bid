@@ -444,6 +444,125 @@ def gemini_minutes(transcript: str) -> dict:
     }
 
 
+TREND_PROMPT = """다음은 최근 한국에서 조회수가 빠르게 오르고 있는 쇼츠(짧은 세로 영상) 목록입니다.
+각 줄은 "제목 | 채널 | 조회수 | 시간당조회수 | 구독자대비배수 | 태그"입니다.
+
+이 데이터를 분석해 아래 JSON 형식으로만 답하세요. 설명은 모두 한국어입니다.
+
+{"themes": [{"title": "뜨는 주제 묶음 이름", "why": "왜 지금 통하는지 한 줄", "examples": ["대표 영상 제목"]}],
+ "hooks": [{"pattern": "반복되는 첫 3초 훅 패턴", "example": "실제 제목 예시"}],
+ "formats": [{"name": "포맷 이름(예: 비포애프터, 리스트형)", "note": "특징 한 줄"}],
+ "takeaway": "이번 분석의 핵심 한 문장"}
+
+themes는 3~5개, hooks는 3~5개, formats는 2~4개. 단순 나열이 아니라
+'구독자 대비 배수가 높은 영상'에서 공통점을 찾아 설명하세요.
+
+쇼츠 목록:
+"""
+
+
+def gemini_trend_report(videos: list[dict]) -> dict:
+    """수집한 쇼츠 목록 → 주제·훅·포맷 분석 리포트 (JSON)."""
+    if not videos:
+        raise SummarizeError("분석할 영상이 없습니다. 먼저 트렌드를 수집해주세요.")
+    lines = []
+    for v in videos[:40]:
+        tags = ", ".join((v.get("tags") or [])[:5])
+        lines.append(
+            f"{str(v.get('title',''))[:120]} | {v.get('channel','')} | "
+            f"{v.get('views',0)}회 | 시간당 {v.get('vph',0)}회 | "
+            f"x{v.get('viral',0)} | {tags}")
+    data = _gemini_call({
+        "contents": [{"parts": [{"text": TREND_PROMPT + "\n".join(lines)}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }, kind="trend", timeout=90)
+    try:
+        out = json.loads(_first_text(data))
+    except json.JSONDecodeError:
+        raise SummarizeError("트렌드 분석 실패 — 다시 시도해주세요.")
+    return {
+        "themes": (out.get("themes") or [])[:6],
+        "hooks": (out.get("hooks") or [])[:6],
+        "formats": (out.get("formats") or [])[:5],
+        "takeaway": str(out.get("takeaway") or "")[:300],
+    }
+
+
+IDEA_PROMPT = """아래는 지금 뜨는 쇼츠 트렌드 분석 결과와, 콘텐츠를 만들려는 회사 정보입니다.
+이 트렌드를 우리 회사 콘텐츠에 적용한 쇼츠·릴스 기획안을 JSON으로만 제안하세요. 한국어로 씁니다.
+
+{"ideas": [{"title": "영상 제목(후킹되게, 30자 내외)",
+            "hook": "첫 3초에 나올 말이나 장면",
+            "outline": ["구성 1", "구성 2", "구성 3"],
+            "why": "이 트렌드의 어떤 점을 빌렸는지 한 줄",
+            "cta": "마지막에 유도할 행동"}]}
+
+ideas는 5개. 실제로 촬영 가능한 수준으로 구체적으로 쓰고, 유행 포맷을 그대로 베끼지 말고
+우리 회사 맥락에 맞게 변형하세요.
+
+[회사 정보]
+__PROFILE__
+
+[트렌드 분석]
+__TREND__
+"""
+
+
+def gemini_content_ideas(trend: dict, profile: str) -> list[dict]:
+    """트렌드 + 회사 소개 → 콘텐츠 기획안 5개."""
+    payload = json.dumps(trend, ensure_ascii=False)[:4000]
+    prompt = (IDEA_PROMPT.replace("__PROFILE__", (profile or "AI·콘텐츠 분야 스타트업")[:800])
+              .replace("__TREND__", payload))
+    data = _gemini_call({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }, kind="trend", timeout=90)
+    try:
+        out = json.loads(_first_text(data))
+    except json.JSONDecodeError:
+        raise SummarizeError("아이디어 생성 실패 — 다시 시도해주세요.")
+    ideas = out.get("ideas") if isinstance(out, dict) else out
+    return [{
+        "title": str(i.get("title", ""))[:200],
+        "hook": str(i.get("hook", ""))[:300],
+        "outline": [str(o)[:200] for o in (i.get("outline") or [])][:6],
+        "why": str(i.get("why", ""))[:300],
+        "cta": str(i.get("cta", ""))[:200],
+    } for i in (ideas or []) if isinstance(i, dict)][:6]
+
+
+REF_PROMPT = """아래는 참고하려는 쇼츠·릴스 영상의 정보입니다.
+이 영상이 왜 통하는지 분해해 JSON으로만 답하세요. 한국어로 씁니다.
+
+{"hook": "첫 3초 훅이 무엇인지(추정 포함)",
+ "structure": ["영상 구성 단계 1", "2", "3"],
+ "why_works": ["먹히는 이유 1", "2"],
+ "apply": ["우리 회사 콘텐츠에 적용할 방법 1", "2"]}
+
+정보가 부족하면 제목·플랫폼 특성을 근거로 합리적으로 추정하되, 단정적으로 쓰지 마세요.
+
+[영상 정보]
+__INFO__
+"""
+
+
+def gemini_reference_analysis(info: str) -> dict:
+    data = _gemini_call({
+        "contents": [{"parts": [{"text": REF_PROMPT.replace("__INFO__", info[:3000])}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }, kind="trend", timeout=60)
+    try:
+        out = json.loads(_first_text(data))
+    except json.JSONDecodeError:
+        raise SummarizeError("레퍼런스 분석 실패 — 다시 시도해주세요.")
+    return {
+        "hook": str(out.get("hook", ""))[:400],
+        "structure": [str(s)[:200] for s in (out.get("structure") or [])][:8],
+        "why_works": [str(s)[:200] for s in (out.get("why_works") or [])][:6],
+        "apply": [str(s)[:200] for s in (out.get("apply") or [])][:6],
+    }
+
+
 def gemini_translate_paragraphs(paragraphs: list[dict]) -> list[dict]:
     """[{id, text}] 목록을 한국어로 번역해 같은 형식으로 반환 (Gemini JSON 모드)."""
     key = gemini_key()

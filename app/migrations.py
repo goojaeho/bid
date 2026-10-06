@@ -210,6 +210,60 @@ MIGRATIONS: list[tuple[int, str]] = [
     (14, """
         alter table routines add column if not exists weekly_goal int not null default 0;
     """),
+    (15, """
+        create table if not exists trend_keywords (
+          id bigint generated always as identity primary key,
+          email text not null,
+          keyword text not null,
+          active boolean not null default true,
+          created_at timestamptz not null default now()
+        );
+        create index if not exists trend_keywords_email_idx
+          on trend_keywords (email, active);
+        create table if not exists trend_videos (
+          id bigint generated always as identity primary key,
+          email text not null,
+          video_id text not null,
+          title text not null default '',
+          channel text not null default '',
+          channel_subs bigint not null default 0,
+          views bigint not null default 0,
+          likes bigint not null default 0,
+          comments bigint not null default 0,
+          duration_sec int not null default 0,
+          published_at timestamptz,
+          thumb text not null default '',
+          keyword text not null default '',
+          source text not null default 'search',
+          tags jsonb not null default '[]'::jsonb,
+          description text not null default '',
+          collected_at timestamptz not null default now(),
+          unique (email, video_id)
+        );
+        create index if not exists trend_videos_email_idx
+          on trend_videos (email, collected_at desc);
+        create table if not exists trend_reports (
+          id bigint generated always as identity primary key,
+          email text not null,
+          kind text not null default 'report',
+          data jsonb not null default '{}'::jsonb,
+          created_at timestamptz not null default now()
+        );
+        create index if not exists trend_reports_email_idx
+          on trend_reports (email, kind, created_at desc);
+        create table if not exists trend_refs (
+          id bigint generated always as identity primary key,
+          email text not null,
+          url text not null,
+          platform text not null default '',
+          title text not null default '',
+          thumb text not null default '',
+          analysis jsonb not null default '{}'::jsonb,
+          created_at timestamptz not null default now()
+        );
+        create index if not exists trend_refs_email_idx
+          on trend_refs (email, created_at desc);
+    """),
 ]
 
 _ran = False

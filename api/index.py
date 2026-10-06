@@ -26,7 +26,8 @@ from fastapi.responses import RedirectResponse
 from fastapi import Body
 
 from app import (auth, english, genie, gmail, gov_sources, kakao, meetings,
-                 migrations, places, routines, searches, store, summarize, todos)
+                 migrations, places, routines, searches, store, summarize,
+                 todos, trends)
 from app.g2b_client import CATEGORIES, G2BApiError, G2BClient
 from app.webui import icon, layout
 
@@ -4589,6 +4590,617 @@ def mail_dismiss_api(request: Request, item_id: int):
         return {"ok": False, "error": "Gmail이 연동되어 있지 않습니다."}
     try:
         gmail.set_status(acct, item_id, "dismissed")
+        return {"ok": True}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ------------------------------------------------- 트렌드 (쇼츠·릴스 분석기)
+
+TRENDS_SETUP = """<div class="card"><p class="error" style="margin:0 0 8px">
+유튜브 API 키(YOUTUBE_API_KEY)가 아직 설정되지 않았습니다.</p>
+<p class="meta" style="margin:0">
+1. <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank">
+Google Cloud 콘솔</a>에서 기존 프로젝트(oneaigen-mail) 선택 → <b>YouTube Data API v3</b> 사용 설정<br>
+2. 사용자 인증 정보 → <b>API 키</b> 만들기 → 키 복사<br>
+3. Vercel 환경변수 <b>YOUTUBE_API_KEY</b>에 붙여넣고 Redeploy<br>
+무료 한도는 하루 10,000단위이고, 이 기능은 1회 수집에 약 500단위만 씁니다.</p></div>"""
+
+TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
+  <a href="#" data-tab="feed" class="on">트렌드</a>
+  <a href="#" data-tab="report">AI 리포트</a>
+  <a href="#" data-tab="idea">콘텐츠 아이디어</a>
+  <a href="#" data-tab="ref">레퍼런스 분석</a>
+</div>
+
+<div id="pane-feed">
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <span id="tr-kws" class="quick-slot"></span>
+      <span style="display:inline-flex;gap:8px;align-items:center">
+        <select id="tr-sort" style="font-size:0.84rem;padding:7px 10px">
+          <option value="speed">지금 터지는 순 (시간당 조회수)</option>
+          <option value="viral">바이럴 지수 순 (구독자 대비)</option>
+          <option value="views">조회수 순</option>
+        </select>
+        <button type="button" id="tr-collect">새로 수집</button>
+      </span>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <input type="text" id="tr-newkw" placeholder="관심 키워드 추가 (예: IR, 전시회, 사업계획서)"
+             maxlength="100" style="flex:1;min-width:180px">
+      <button type="button" id="tr-addkw" class="chip chip-save">키워드 추가</button>
+      <span id="tr-last" class="meta" style="margin:0"></span>
+    </div>
+    <div id="tr-status"></div>
+  </div>
+  <div id="tr-grid" class="tr-grid"></div>
+</div>
+
+<div id="pane-report" hidden>
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <b style="font-size:0.95rem">AI 트렌드 리포트</b>
+      <button type="button" id="tr-makereport">리포트 생성</button>
+    </div>
+    <p class="meta" style="margin:6px 0 0">수집된 쇼츠에서 뜨는 주제·훅·포맷을 묶어 분석합니다.</p>
+  </div>
+  <div id="tr-report"></div>
+</div>
+
+<div id="pane-idea" hidden>
+  <div class="card">
+    <b style="font-size:0.95rem">콘텐츠 아이디어 생성</b>
+    <p class="meta" style="margin:6px 0 8px">우리 회사·서비스를 적어두면 트렌드에 맞춘 기획안을 만들어줍니다.</p>
+    <textarea id="tr-profile" rows="3" placeholder="예: 멜라카 — AI 기반 콘텐츠 제작 솔루션 GENDIA 운영. 타깃은 중소기업 마케터와 투자자."></textarea>
+    <button type="button" id="tr-makeidea">아이디어 5개 생성</button>
+  </div>
+  <div id="tr-ideas"></div>
+</div>
+
+<div id="pane-ref" hidden>
+  <div class="card">
+    <b style="font-size:0.95rem">레퍼런스 영상 분석</b>
+    <p class="meta" style="margin:6px 0 8px">인스타 릴스·틱톡·쇼츠 링크를 넣으면 훅과 구성을 분해합니다.
+    (인스타는 비공개라 메모를 같이 적어주면 정확해집니다)</p>
+    <div class="row">
+      <input type="text" id="ref-url" placeholder="영상 URL 붙여넣기" style="flex:1;min-width:200px">
+    </div>
+    <div class="row">
+      <input type="text" id="ref-note" placeholder="메모 (선택) — 영상 내용·자막을 적으면 더 정확해집니다" style="flex:1;min-width:200px">
+      <button type="button" id="ref-run">분석하기</button>
+    </div>
+    <div id="ref-status"></div>
+  </div>
+  <div id="ref-list"></div>
+</div>
+
+<style>
+  .tr-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+  .tr-card { background: var(--card); border-radius: var(--r-lg); box-shadow: var(--shadow);
+             overflow: hidden; display: flex; flex-direction: column; }
+  .tr-card img { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; background: var(--fill); }
+  .tr-body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 4px; }
+  .tr-title { font-size: 0.88rem; font-weight: 700; color: var(--text); line-height: 1.4;
+              display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .tr-ch { color: var(--muted); font-size: 0.76rem; }
+  .tr-nums { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+  .tr-badge { font-size: 0.72rem; font-weight: 700; border-radius: 6px; padding: 2px 7px;
+              background: var(--fill); color: var(--sub); white-space: nowrap; }
+  .tr-badge.hot { background: var(--red-soft); color: var(--red); }
+  .tr-badge.viral { background: var(--accent-soft); color: var(--accent); }
+  .tr-kw { font-size: 0.7rem; color: var(--muted); }
+  .tr-sec { margin-bottom: 14px; }
+  .tr-sec h4 { margin: 0 0 6px; font-size: 0.92rem; }
+  .tr-item { background: var(--fill); border-radius: 10px; padding: 10px 12px;
+             margin-bottom: 6px; font-size: 0.87rem; }
+  .tr-item b { color: var(--text); }
+  .tr-item .sub { color: var(--sub); font-size: 0.82rem; }
+  .idea-card { background: var(--card); border-radius: var(--r-lg); box-shadow: var(--shadow);
+               padding: 16px 18px; margin-bottom: 12px; }
+  .idea-card h4 { margin: 0 0 6px; font-size: 1rem; }
+  .idea-card ol { margin: 6px 0 0; padding-left: 20px; font-size: 0.87rem; color: var(--sub); }
+  .ref-card { background: var(--card); border-radius: var(--r-lg); box-shadow: var(--shadow);
+              padding: 14px 16px; margin-bottom: 12px; display: flex; gap: 12px; }
+  .ref-card img { width: 90px; border-radius: 8px; object-fit: cover; flex-shrink: 0; }
+  @media (max-width: 720px) {
+    .tr-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+    .ref-card img { width: 64px; }
+  }
+</style>
+<script>
+(function () {
+  function $(id) { return document.getElementById(id); }
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function post(url, body) {
+    return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(body || {}) }).then(function (r) { return r.json(); });
+  }
+  function num(n) {
+    n = n || 0;
+    if (n >= 10000) return Math.round(n / 1000) / 10 + "만";
+    if (n >= 1000) return Math.round(n / 100) / 10 + "천";
+    return String(n);
+  }
+  function setStatus(id, msg, isError) {
+    var box = $(id);
+    if (box) box.innerHTML = msg
+      ? '<p class="' + (isError ? "error" : "meta") + '" style="margin:8px 0 0">' + msg + "</p>" : "";
+  }
+
+  // ---------- 탭
+  $("tr-tabs").addEventListener("click", function (e) {
+    var a = e.target.closest("a[data-tab]");
+    if (!a) return;
+    e.preventDefault();
+    this.querySelectorAll("a").forEach(function (x) { x.classList.toggle("on", x === a); });
+    ["feed", "report", "idea", "ref"].forEach(function (t) {
+      $("pane-" + t).hidden = t !== a.dataset.tab;
+    });
+    if (a.dataset.tab === "report") loadReport();
+    if (a.dataset.tab === "idea") loadIdeas();
+    if (a.dataset.tab === "ref") loadRefs();
+  });
+
+  // ---------- 키워드
+  var activeKw = "";
+  function loadKeywords() {
+    fetch("/api/trends/keywords").then(function (r) { return r.json(); })
+      .then(function (d) {
+        var box = $("tr-kws");
+        box.innerHTML = "";
+        var all = el("a", "chip" + (activeKw ? "" : " chip-user"), "전체");
+        all.href = "#";
+        all.addEventListener("click", function (e) {
+          e.preventDefault();
+          activeKw = "";
+          loadKeywords();
+          loadFeed();
+        });
+        box.appendChild(all);
+        if (!d.ok) return;
+        d.items.forEach(function (k) {
+          var chip = el("a", "chip chip-user" + (activeKw === k.keyword ? " on" : ""));
+          chip.href = "#";
+          if (activeKw === k.keyword) chip.style.cssText = "background:var(--accent-soft);color:var(--accent)";
+          chip.appendChild(el("span", "", k.keyword));
+          var x = el("button", "chip-x", "\\u00d7");
+          x.type = "button";
+          x.title = "키워드 삭제";
+          x.addEventListener("click", function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            if (!confirm('"' + k.keyword + '" 키워드를 삭제할까요?')) return;
+            post("/api/trends/keywords/" + k.id + "/delete").then(loadKeywords);
+          });
+          chip.appendChild(x);
+          chip.addEventListener("click", function (e) {
+            e.preventDefault();
+            activeKw = k.keyword;
+            loadKeywords();
+            loadFeed();
+          });
+          box.appendChild(chip);
+        });
+      }).catch(function () {});
+  }
+  $("tr-addkw").addEventListener("click", function () {
+    var v = $("tr-newkw").value.trim();
+    if (!v) return;
+    post("/api/trends/keywords", { keyword: v }).then(function (d) {
+      if (!d.ok) { alert(d.error || "추가 실패"); return; }
+      $("tr-newkw").value = "";
+      loadKeywords();
+    });
+  });
+
+  // ---------- 피드
+  function loadFeed() {
+    var sort = $("tr-sort").value;
+    fetch("/api/trends/videos?sort=" + sort + (activeKw ? "&keyword=" + encodeURIComponent(activeKw) : ""))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var grid = $("tr-grid");
+        grid.innerHTML = "";
+        if (!d.ok) { setStatus("tr-status", d.error, true); return; }
+        $("tr-last").textContent = d.last ? "마지막 수집: " + String(d.last).slice(0, 16).replace("T", " ") : "";
+        if (!d.items.length) {
+          grid.innerHTML = '<p class="meta">아직 수집된 영상이 없습니다. [새로 수집]을 눌러주세요.</p>';
+          return;
+        }
+        d.items.forEach(function (v) {
+          var card = el("div", "tr-card");
+          var a = document.createElement("a");
+          a.href = "https://www.youtube.com/shorts/" + v.video_id;
+          a.target = "_blank";
+          if (v.thumb) {
+            var img = document.createElement("img");
+            img.src = v.thumb;
+            img.loading = "lazy";
+            a.appendChild(img);
+          }
+          card.appendChild(a);
+          var body = el("div", "tr-body");
+          var t = el("a", "tr-title", v.title);
+          t.href = a.href;
+          t.target = "_blank";
+          body.appendChild(t);
+          body.appendChild(el("span", "tr-ch", v.channel
+            + (v.channel_subs ? " · 구독 " + num(v.channel_subs) : "")));
+          var nums = el("div", "tr-nums");
+          nums.appendChild(el("span", "tr-badge", "조회 " + num(v.views)));
+          nums.appendChild(el("span", "tr-badge hot", "시간당 " + num(v.vph)));
+          nums.appendChild(el("span", "tr-badge viral", "x" + v.viral));
+          body.appendChild(nums);
+          if (v.keyword) body.appendChild(el("span", "tr-kw", "#" + v.keyword));
+          card.appendChild(body);
+          grid.appendChild(card);
+        });
+      }).catch(function () {});
+  }
+  $("tr-sort").addEventListener("change", loadFeed);
+  $("tr-collect").addEventListener("click", function () {
+    var b = this;
+    b.disabled = true;
+    setStatus("tr-status", "유튜브에서 수집 중… (10~20초)");
+    post("/api/trends/collect").then(function (d) {
+      b.disabled = false;
+      if (!d.ok) { setStatus("tr-status", d.error || "수집 실패", true); return; }
+      setStatus("tr-status", "새 영상 " + d.saved + "건 수집 완료"
+        + (d.errors && d.errors.length ? " · " + d.errors.join(" / ") : ""));
+      loadFeed();
+    }).catch(function () { b.disabled = false; setStatus("tr-status", "네트워크 오류", true); });
+  });
+
+  // ---------- AI 리포트
+  function renderReport(rep) {
+    var box = $("tr-report");
+    box.innerHTML = "";
+    if (!rep) { box.innerHTML = '<p class="meta">아직 리포트가 없습니다. [리포트 생성]을 눌러주세요.</p>'; return; }
+    var card = el("div", "card");
+    if (rep.data.takeaway) {
+      var top = el("p", "", rep.data.takeaway);
+      top.style.cssText = "font-weight:700;margin:0 0 12px";
+      card.appendChild(top);
+    }
+    function section(title, items, render) {
+      if (!items || !items.length) return;
+      var sec = el("div", "tr-sec");
+      sec.appendChild(el("h4", "", title));
+      items.forEach(function (it) { sec.appendChild(render(it)); });
+      card.appendChild(sec);
+    }
+    section("뜨는 주제", rep.data.themes, function (t) {
+      var d = el("div", "tr-item");
+      d.appendChild(el("b", "", t.title || ""));
+      if (t.why) d.appendChild(el("div", "sub", t.why));
+      if (t.examples && t.examples.length) d.appendChild(el("div", "sub", "예: " + t.examples.join(" / ")));
+      return d;
+    });
+    section("반복되는 훅", rep.data.hooks, function (h) {
+      var d = el("div", "tr-item");
+      d.appendChild(el("b", "", h.pattern || ""));
+      if (h.example) d.appendChild(el("div", "sub", "예: " + h.example));
+      return d;
+    });
+    section("포맷", rep.data.formats, function (f) {
+      var d = el("div", "tr-item");
+      d.appendChild(el("b", "", f.name || ""));
+      if (f.note) d.appendChild(el("div", "sub", f.note));
+      return d;
+    });
+    card.appendChild(el("p", "meta", "생성: " + String(rep.created_at || "").slice(0, 16).replace("T", " ")));
+    box.appendChild(card);
+  }
+  function loadReport() {
+    fetch("/api/trends/report").then(function (r) { return r.json(); })
+      .then(function (d) { if (d.ok) renderReport(d.report); }).catch(function () {});
+  }
+  $("tr-makereport").addEventListener("click", function () {
+    var b = this;
+    b.disabled = true;
+    $("tr-report").innerHTML = '<p class="meta">분석 중… (10~20초)</p>';
+    post("/api/trends/report").then(function (d) {
+      b.disabled = false;
+      if (!d.ok) { $("tr-report").innerHTML = '<p class="error">' + (d.error || "실패") + "</p>"; return; }
+      renderReport(d.report);
+    }).catch(function () { b.disabled = false; });
+  });
+
+  // ---------- 아이디어
+  function renderIdeas(rep) {
+    var box = $("tr-ideas");
+    box.innerHTML = "";
+    if (!rep || !rep.data || !rep.data.ideas) {
+      box.innerHTML = '<p class="meta">아직 생성된 아이디어가 없습니다.</p>';
+      return;
+    }
+    if (rep.data.profile) $("tr-profile").value = rep.data.profile;
+    rep.data.ideas.forEach(function (idea) {
+      var card = el("div", "idea-card");
+      card.appendChild(el("h4", "", idea.title || ""));
+      if (idea.hook) {
+        var hk = el("div", "", "훅: " + idea.hook);
+        hk.style.cssText = "color:var(--accent);font-weight:700;font-size:0.88rem";
+        card.appendChild(hk);
+      }
+      if (idea.outline && idea.outline.length) {
+        var ol = document.createElement("ol");
+        idea.outline.forEach(function (o) { ol.appendChild(el("li", "", o)); });
+        card.appendChild(ol);
+      }
+      if (idea.why) card.appendChild(el("p", "meta", idea.why));
+      if (idea.cta) card.appendChild(el("p", "meta", "CTA: " + idea.cta));
+      var add = el("button", "chip chip-save", "할 일로 추가");
+      add.type = "button";
+      add.addEventListener("click", function () {
+        add.disabled = true;
+        post("/api/todos", { title: "[쇼츠] " + idea.title, area: "work",
+                             category: "콘텐츠" }).then(function (d) {
+          add.disabled = false;
+          add.textContent = d.ok ? "추가됨 ✓" : "추가 실패";
+        });
+      });
+      card.appendChild(add);
+      box.appendChild(card);
+    });
+  }
+  function loadIdeas() {
+    fetch("/api/trends/ideas").then(function (r) { return r.json(); })
+      .then(function (d) { if (d.ok) renderIdeas(d.report); }).catch(function () {});
+  }
+  $("tr-makeidea").addEventListener("click", function () {
+    var b = this;
+    b.disabled = true;
+    $("tr-ideas").innerHTML = '<p class="meta">기획안 작성 중… (10~20초)</p>';
+    post("/api/trends/ideas", { profile: $("tr-profile").value }).then(function (d) {
+      b.disabled = false;
+      if (!d.ok) { $("tr-ideas").innerHTML = '<p class="error">' + (d.error || "실패") + "</p>"; return; }
+      renderIdeas(d.report);
+    }).catch(function () { b.disabled = false; });
+  });
+
+  // ---------- 레퍼런스
+  function renderRefs(items) {
+    var box = $("ref-list");
+    box.innerHTML = "";
+    if (!items.length) { box.innerHTML = '<p class="meta">분석한 레퍼런스가 없습니다.</p>'; return; }
+    items.forEach(function (rf) {
+      var card = el("div", "ref-card");
+      if (rf.thumb) {
+        var img = document.createElement("img");
+        img.src = rf.thumb;
+        img.loading = "lazy";
+        card.appendChild(img);
+      }
+      var body = el("div", "");
+      body.style.cssText = "flex:1;min-width:0";
+      var link = el("a", "", rf.title || rf.url);
+      link.href = rf.url;
+      link.target = "_blank";
+      link.style.cssText = "font-weight:700;font-size:0.9rem";
+      body.appendChild(link);
+      body.appendChild(el("div", "meta", rf.platform));
+      var a = rf.analysis || {};
+      if (a.hook) body.appendChild(el("div", "tr-item", "훅: " + a.hook));
+      (a.structure || []).forEach(function (s, i) {
+        body.appendChild(el("div", "meta", (i + 1) + ". " + s));
+      });
+      (a.why_works || []).forEach(function (s) {
+        body.appendChild(el("div", "meta", "· 통하는 이유: " + s));
+      });
+      (a.apply || []).forEach(function (s) {
+        body.appendChild(el("div", "meta", "→ 적용: " + s));
+      });
+      var del = el("button", "link-btn", "삭제");
+      del.type = "button";
+      del.addEventListener("click", function () {
+        post("/api/trends/refs/" + rf.id + "/delete").then(loadRefs);
+      });
+      body.appendChild(del);
+      card.appendChild(body);
+      box.appendChild(card);
+    });
+  }
+  function loadRefs() {
+    fetch("/api/trends/refs").then(function (r) { return r.json(); })
+      .then(function (d) { if (d.ok) renderRefs(d.items); }).catch(function () {});
+  }
+  $("ref-run").addEventListener("click", function () {
+    var url = $("ref-url").value.trim();
+    if (!url) { alert("영상 URL을 입력해주세요."); return; }
+    var b = this;
+    b.disabled = true;
+    setStatus("ref-status", "분석 중…");
+    post("/api/trends/refs", { url: url, note: $("ref-note").value }).then(function (d) {
+      b.disabled = false;
+      if (!d.ok) { setStatus("ref-status", d.error || "실패", true); return; }
+      setStatus("ref-status", "");
+      $("ref-url").value = "";
+      $("ref-note").value = "";
+      loadRefs();
+    }).catch(function () { b.disabled = false; setStatus("ref-status", "네트워크 오류", true); });
+  });
+
+  loadKeywords();
+  loadFeed();
+})();
+</script>"""
+
+
+@app.get("/trends", response_class=HTMLResponse)
+def trends_page(request: Request):
+    redirect = gate(request)
+    if redirect:
+        return redirect
+    user = user_of(request)
+    if not auth.is_admin(user):
+        return RedirectResponse("/bid", status_code=302)
+    content = TRENDS_PAGE if trends.enabled() else TRENDS_SETUP
+    return layout("트렌드", icon("trending", 20) + " 쇼츠 트렌드", "/trends",
+                  content, user=user, admin=True)
+
+
+@app.get("/api/trends/videos")
+def api_trends_videos(request: Request, sort: str = Query("speed"),
+                      keyword: str = Query("")):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        return {"ok": True, "items": trends.list_videos(user, keyword, sort),
+                "last": trends.last_collected(user)}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/trends/collect")
+def api_trends_collect(request: Request):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        return {"ok": True, **trends.collect(user)}
+    except (trends.TrendError, store.StoreError) as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/trends/keywords")
+def api_trends_keywords(request: Request):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        return {"ok": True, "items": trends.list_keywords(user)}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/trends/keywords")
+def api_trends_keyword_add(request: Request, body: dict = Body(...)):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        return {"ok": True, "item": trends.add_keyword(
+            user, str(body.get("keyword") or ""))}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/trends/keywords/{keyword_id}/delete")
+def api_trends_keyword_delete(request: Request, keyword_id: int):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        trends.delete_keyword(user, keyword_id)
+        return {"ok": True}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/trends/report")
+def api_trends_report_get(request: Request):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        return {"ok": True, "report": trends.latest_report(user, "report")}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/trends/report")
+def api_trends_report_make(request: Request):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        videos = trends.recent_for_ai(user)
+        data = summarize.gemini_trend_report(videos)
+        return {"ok": True, "report": trends.save_report(user, "report", data)}
+    except (store.StoreError, summarize.SummarizeError) as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/trends/ideas")
+def api_trends_ideas_get(request: Request):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        return {"ok": True, "report": trends.latest_report(user, "ideas")}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/trends/ideas")
+def api_trends_ideas_make(request: Request, body: dict = Body(...)):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    profile = str(body.get("profile") or "")
+    try:
+        report = trends.latest_report(user, "report")
+        trend = report["data"] if report else None
+        if not trend:
+            videos = trends.recent_for_ai(user)
+            trend = summarize.gemini_trend_report(videos)
+            trends.save_report(user, "report", trend)
+        ideas = summarize.gemini_content_ideas(trend, profile)
+        saved = trends.save_report(user, "ideas",
+                                   {"ideas": ideas, "profile": profile})
+        return {"ok": True, "report": saved}
+    except (store.StoreError, summarize.SummarizeError) as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/trends/refs")
+def api_trends_refs(request: Request):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        return {"ok": True, "items": trends.list_refs(user)}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/trends/refs")
+def api_trends_ref_add(request: Request, body: dict = Body(...)):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    url = str(body.get("url") or "").strip()
+    if not url.startswith("http"):
+        return {"ok": False, "error": "올바른 영상 URL을 입력해주세요."}
+    note = str(body.get("note") or "").strip()
+    try:
+        meta = trends.fetch_oembed(url)
+        info = (f"플랫폼: {meta.get('platform')}\n제목: {meta.get('title')}\n"
+                f"채널/작성자: {meta.get('author')}\nURL: {url}\n메모: {note}")
+        if not meta.get("title") and not note:
+            return {"ok": False,
+                    "error": "이 링크는 공개 정보를 가져올 수 없습니다. 메모에 영상 내용을 적어주세요."}
+        analysis = summarize.gemini_reference_analysis(info)
+        return {"ok": True, "item": trends.save_ref(user, url, meta, analysis)}
+    except (store.StoreError, summarize.SummarizeError) as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/trends/refs/{ref_id}/delete")
+def api_trends_ref_delete(request: Request, ref_id: int):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        trends.delete_ref(user, ref_id)
         return {"ok": True}
     except store.StoreError as e:
         return {"ok": False, "error": str(e)}

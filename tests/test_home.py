@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 import api.index as web
 from app import (auth, english, genie, gmail, kakao, meetings, places,
-                 routines, searches, summarize, todos)
+                 routines, searches, summarize, todos, trends)
 from app.store import StoreError
 
 KST = ZoneInfo("Asia/Seoul")
@@ -836,6 +836,125 @@ class RoutineTest(unittest.TestCase):
                                        "weekdays": "0123456"})
         self.assertTrue(r.json()["ok"])
         self.assertEqual(captured["weekly_goal"], 3)
+
+
+class TrendTest(unittest.TestCase):
+    """쇼츠 트렌드 분석기 — 지표 계산·수집·API 가드."""
+
+    def setUp(self):
+        os.environ["GOOGLE_CLIENT_ID"] = "cid"
+        os.environ["GOOGLE_CLIENT_SECRET"] = "sec"
+        os.environ["ADMIN_EMAILS"] = "boss@company.com"
+        self.client = TestClient(web.app)
+        self.admin_cookie = {auth.COOKIE_NAME: auth.make_session("boss@company.com")}
+        self.user_cookie = {auth.COOKIE_NAME: auth.make_session("guest@gmail.com")}
+
+    def tearDown(self):
+        for k in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "ADMIN_EMAILS",
+                  "YOUTUBE_API_KEY"):
+            os.environ.pop(k, None)
+
+    def test_duration_parsing_and_shorts_filter(self):
+        self.assertEqual(trends.parse_duration("PT59S"), 59)
+        self.assertEqual(trends.parse_duration("PT2M30S"), 150)
+        self.assertEqual(trends.parse_duration("PT1H2M3S"), 3723)
+        self.assertEqual(trends.parse_duration("bad"), 0)
+
+    def test_metrics(self):
+        from datetime import timezone as tz
+        now = datetime(2026, 10, 6, 12, 0, tzinfo=tz.utc)
+        # 10시간 전 업로드 + 5만 조회 → 시간당 5천
+        self.assertEqual(
+            trends.views_per_hour(50000, "2026-10-06T02:00:00Z", now=now), 5000)
+        # 구독자 1천인데 10만 조회 → 100배
+        self.assertEqual(trends.viral_score(100000, 1000), 100.0)
+        self.assertEqual(trends.viral_score(500, 0), 500.0)  # 0으로 나누기 방지
+
+    def test_rows_filter_long_videos(self):
+        items = [
+            {"id": "a", "snippet": {"title": "쇼츠", "channelId": "c1",
+                                    "channelTitle": "채널", "publishedAt": "2026-10-05T00:00:00Z",
+                                    "thumbnails": {"medium": {"url": "t.jpg"}}, "tags": ["ai"]},
+             "statistics": {"viewCount": "1000", "likeCount": "10"},
+             "contentDetails": {"duration": "PT45S"}},
+            {"id": "b", "snippet": {"title": "롱폼", "channelId": "c2", "channelTitle": "ch"},
+             "statistics": {"viewCount": "999"}, "contentDetails": {"duration": "PT12M"}},
+        ]
+        rows = trends._rows_from_items(items, {"c1": 5000}, "AI", "search")
+        self.assertEqual([r["video_id"] for r in rows], ["a"])  # 3분 초과 제외
+        self.assertEqual(rows[0]["channel_subs"], 5000)
+        self.assertEqual(rows[0]["keyword"], "AI")
+
+    def test_collect_aggregates_sources(self):
+        pop = [{"video_id": "p1", "title": "인기", "views": 100}]
+        kw = [{"video_id": "k1", "title": "키워드", "views": 200}]
+        saved = {}
+        with patch.object(trends, "fetch_popular", return_value=pop), \
+             patch.object(trends, "fetch_keyword", return_value=kw), \
+             patch.object(trends, "save_videos",
+                          side_effect=lambda e, rows: saved.update(rows=rows) or len(rows)):
+            out = trends.collect("e@x.com", keywords=["AI"])
+        self.assertEqual(out["collected"], 2)
+        self.assertEqual([r["video_id"] for r in saved["rows"]], ["p1", "k1"])
+
+    def test_collect_stops_on_quota_error(self):
+        with patch.object(trends, "fetch_popular", return_value=[]), \
+             patch.object(trends, "fetch_keyword",
+                          side_effect=trends.TrendError("오늘 유튜브 API 무료 한도를 다 썼습니다.")), \
+             patch.object(trends, "save_videos", return_value=0):
+            out = trends.collect("e@x.com", keywords=["AI", "창업"])
+        self.assertEqual(len(out["errors"]), 1)  # 첫 실패 후 중단
+
+    def test_setup_card_without_key(self):
+        r = self.client.get("/trends", cookies=self.admin_cookie)
+        self.assertIn("YOUTUBE_API_KEY", r.text)
+
+    def test_page_renders_with_key(self):
+        os.environ["YOUTUBE_API_KEY"] = "ytkey"
+        r = self.client.get("/trends", cookies=self.admin_cookie)
+        for marker in ("tr-collect", "tr-grid", "AI 리포트", "콘텐츠 아이디어",
+                       "레퍼런스 분석", "시간당 조회수"):
+            self.assertIn(marker, r.text, marker)
+
+    def test_non_admin_blocked(self):
+        r = self.client.get("/trends", cookies=self.user_cookie,
+                            follow_redirects=False)
+        self.assertEqual((r.status_code, r.headers["location"]), (302, "/bid"))
+        r = self.client.get("/api/trends/videos", cookies=self.user_cookie)
+        self.assertFalse(r.json()["ok"])
+
+    def test_report_api_wiring(self):
+        videos = [{"title": "t", "channel": "c", "views": 1, "vph": 1, "viral": 1}]
+        rep = {"themes": [{"title": "주제"}], "hooks": [], "formats": [],
+               "takeaway": "핵심"}
+        with patch.object(trends, "recent_for_ai", return_value=videos), \
+             patch.object(summarize, "gemini_trend_report", return_value=rep), \
+             patch.object(trends, "save_report",
+                          side_effect=lambda e, k, d: {"kind": k, "data": d}):
+            r = self.client.post("/api/trends/report", cookies=self.admin_cookie)
+        d = r.json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["report"]["data"]["takeaway"], "핵심")
+
+    def test_reference_requires_fetchable_or_note(self):
+        with patch.object(trends, "fetch_oembed",
+                          return_value={"platform": "instagram", "title": "",
+                                        "author": "", "thumb": ""}):
+            r = self.client.post("/api/trends/refs", cookies=self.admin_cookie,
+                                 json={"url": "https://www.instagram.com/reel/x/"})
+        self.assertFalse(r.json()["ok"])  # 메모 없으면 분석 거부
+
+        analysis = {"hook": "훅", "structure": [], "why_works": [], "apply": []}
+        with patch.object(trends, "fetch_oembed",
+                          return_value={"platform": "tiktok", "title": "영상",
+                                        "author": "a", "thumb": "t.jpg"}), \
+             patch.object(summarize, "gemini_reference_analysis", return_value=analysis), \
+             patch.object(trends, "save_ref",
+                          side_effect=lambda e, u, m, a: {"url": u, "analysis": a}):
+            r = self.client.post("/api/trends/refs", cookies=self.admin_cookie,
+                                 json={"url": "https://www.tiktok.com/@a/video/1"})
+        self.assertTrue(r.json()["ok"])
+        self.assertEqual(r.json()["item"]["analysis"]["hook"], "훅")
 
 
 if __name__ == "__main__":
