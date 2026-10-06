@@ -444,6 +444,54 @@ def gemini_minutes(transcript: str) -> dict:
     }
 
 
+KEYWORD_PROMPT = """아래는 지금 한국에서 인기인 쇼츠 제목·태그 목록과, 콘텐츠를 만들려는 회사 정보입니다.
+이 회사가 "계속 추적할 만한" 검색 키워드를 JSON으로만 제안하세요. 한국어로 씁니다.
+
+{"trending": [{"keyword": "지금 쇼츠에서 뜨는 키워드", "why": "왜 뜨는지 한 줄"}],
+ "for_us": [{"keyword": "우리 사업과 맞닿은 키워드", "why": "왜 우리에게 유용한지 한 줄"}]}
+
+trending은 실제 목록에서 반복되는 소재·표현에서 5개를 뽑고,
+for_us는 회사 정보를 반영해 5개를 제안하세요.
+키워드는 유튜브 검색에 바로 쓸 수 있게 2~10자 내외의 짧은 말로 쓰세요.
+
+[회사 정보]
+__PROFILE__
+
+[지금 인기 쇼츠]
+__VIDEOS__
+"""
+
+
+def gemini_keyword_suggestions(videos: list[dict], profile: str = "") -> dict:
+    """수집된 인기 쇼츠 + 회사 정보 → 추적할 키워드 제안."""
+    if not videos:
+        raise SummarizeError("먼저 트렌드를 수집해주세요.")
+    lines = []
+    for v in videos[:40]:
+        tags = ", ".join((v.get("tags") or [])[:5])
+        lines.append(f"{str(v.get('title',''))[:120]}" + (f" | {tags}" if tags else ""))
+    prompt = (KEYWORD_PROMPT
+              .replace("__PROFILE__", (profile or "AI·콘텐츠 분야 스타트업")[:600])
+              .replace("__VIDEOS__", "\n".join(lines)))
+    data = _gemini_call({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
+    }, kind="trend", timeout=60)
+    try:
+        out = json.loads(_first_text(data))
+    except json.JSONDecodeError:
+        raise SummarizeError("키워드 제안 실패 — 다시 시도해주세요.")
+
+    def clean(items):
+        return [{"keyword": str(i.get("keyword", "")).strip()[:50],
+                 "why": str(i.get("why", ""))[:150]}
+                for i in (items or []) if isinstance(i, dict)
+                and str(i.get("keyword", "")).strip()][:6]
+
+    return {"trending": clean(out.get("trending")),
+            "for_us": clean(out.get("for_us"))}
+
+
 TREND_PROMPT = """다음은 최근 한국에서 조회수가 빠르게 오르고 있는 쇼츠(짧은 세로 영상) 목록입니다.
 각 줄은 "제목 | 채널 | 조회수 | 시간당조회수 | 구독자대비배수 | 태그"입니다.
 

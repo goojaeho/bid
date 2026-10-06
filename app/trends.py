@@ -23,7 +23,6 @@ KST = ZoneInfo("Asia/Seoul")
 TIMEOUT = 15
 YT = "https://www.googleapis.com/youtube/v3"
 SHORTS_MAX_SEC = 180  # 쇼츠 = 3분 이하
-DEFAULT_KEYWORDS = ["AI", "스타트업", "콘텐츠 마케팅"]
 VIDEO_FIELDS = ("id,video_id,title,channel,channel_subs,views,likes,comments,"
                 "duration_sec,published_at,thumb,keyword,source,collected_at")
 
@@ -237,6 +236,23 @@ def recent_for_ai(email: str, limit: int = 40) -> list[dict]:
     return rows[:limit]
 
 
+AUTO_REFRESH_HOURS = 6
+
+
+def needs_refresh(email: str, hours: int = AUTO_REFRESH_HOURS) -> bool:
+    """마지막 수집이 N시간을 넘었으면 (또는 한 번도 없으면) 자동 수집 대상."""
+    last = last_collected(email)
+    if not last:
+        return True
+    try:
+        when = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return True
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=KST)
+    return (datetime.now(KST) - when) > timedelta(hours=hours)
+
+
 def last_collected(email: str) -> str | None:
     rows = todos._request(
         "GET", "trend_videos",
@@ -254,17 +270,6 @@ def list_keywords(email: str) -> list[dict]:
         params={"select": "id,keyword,active", "email": f"eq.{email}",
                 "active": "is.true", "order": "created_at.asc", "limit": "30"},
     ).json()
-    if not rows:  # 처음이면 기본 키워드 심기
-        for kw in DEFAULT_KEYWORDS:
-            try:
-                add_keyword(email, kw)
-            except StoreError:
-                pass
-        rows = todos._request(
-            "GET", "trend_keywords",
-            params={"select": "id,keyword,active", "email": f"eq.{email}",
-                    "active": "is.true", "order": "created_at.asc"},
-        ).json()
     return rows
 
 

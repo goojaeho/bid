@@ -957,5 +957,50 @@ class TrendTest(unittest.TestCase):
         self.assertEqual(r.json()["item"]["analysis"]["hook"], "훅")
 
 
+    def test_needs_refresh_window(self):
+        from datetime import timedelta as td
+        now = datetime.now(KST)
+        with patch.object(trends, "last_collected", return_value=None):
+            self.assertTrue(trends.needs_refresh("e@x.com"))  # 한 번도 안 모았으면
+        with patch.object(trends, "last_collected",
+                          return_value=(now - td(hours=1)).isoformat()):
+            self.assertFalse(trends.needs_refresh("e@x.com"))
+        with patch.object(trends, "last_collected",
+                          return_value=(now - td(hours=9)).isoformat()):
+            self.assertTrue(trends.needs_refresh("e@x.com"))
+
+    def test_keywords_not_auto_seeded(self):
+        # 키워드를 몰라도 되는 구조 — 기본 키워드를 멋대로 심지 않는다
+        with patch.object(todos, "_request",
+                          return_value=type("R", (), {"json": lambda self: []})()):
+            self.assertEqual(trends.list_keywords("e@x.com"), [])
+
+    def test_collect_without_keywords_uses_popular_only(self):
+        calls = {"kw": 0}
+        with patch.object(trends, "fetch_popular",
+                          return_value=[{"video_id": "p1"}]), \
+             patch.object(trends, "fetch_keyword",
+                          side_effect=lambda *a, **k: calls.update(kw=calls["kw"] + 1) or []), \
+             patch.object(trends, "save_videos", return_value=1):
+            out = trends.collect("e@x.com", keywords=[])
+        self.assertEqual(out["collected"], 1)
+        self.assertEqual(calls["kw"], 0)  # 키워드 검색은 호출하지 않음
+
+    def test_suggest_api_returns_two_groups(self):
+        sug = {"trending": [{"keyword": "숏폼편집", "why": "반복 등장"}],
+               "for_us": [{"keyword": "IR 피칭", "why": "우리 사업과 연결"}]}
+        with patch.object(trends, "needs_refresh", return_value=False), \
+             patch.object(trends, "recent_for_ai", return_value=[{"title": "t"}]), \
+             patch.object(trends, "latest_report", return_value=None), \
+             patch.object(summarize, "gemini_keyword_suggestions", return_value=sug), \
+             patch.object(trends, "save_report", return_value={}):
+            r = self.client.post("/api/trends/suggest", cookies=self.admin_cookie,
+                                 json={"profile": "AI 콘텐츠 회사"})
+        d = r.json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["trending"][0]["keyword"], "숏폼편집")
+        self.assertEqual(d["for_us"][0]["keyword"], "IR 피칭")
+
+
 if __name__ == "__main__":
     unittest.main()

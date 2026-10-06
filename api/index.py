@@ -4627,11 +4627,15 @@ TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
       </span>
     </div>
     <div class="row" style="margin-top:8px">
-      <input type="text" id="tr-newkw" placeholder="관심 키워드 추가 (예: IR, 전시회, 사업계획서)"
-             maxlength="100" style="flex:1;min-width:180px">
-      <button type="button" id="tr-addkw" class="chip chip-save">키워드 추가</button>
+      <button type="button" id="tr-suggest" class="chip chip-save">AI 키워드 추천</button>
+      <input type="text" id="tr-newkw" placeholder="직접 추가 (예: IR, 전시회)"
+             maxlength="100" style="flex:1;min-width:150px">
+      <button type="button" id="tr-addkw" class="chip chip-save">추가</button>
       <span id="tr-last" class="meta" style="margin:0"></span>
     </div>
+    <p class="meta" style="margin:6px 0 0">키워드를 안 넣어도 한국 인기 쇼츠는 자동으로 모읍니다.
+    키워드를 추가하면 그 주제까지 같이 추적해요.</p>
+    <div id="tr-suggest-box"></div>
     <div id="tr-status"></div>
   </div>
   <div id="tr-grid" class="tr-grid"></div>
@@ -4641,9 +4645,10 @@ TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
   <div class="card">
     <div class="row" style="justify-content:space-between">
       <b style="font-size:0.95rem">AI 트렌드 리포트</b>
-      <button type="button" id="tr-makereport">리포트 생성</button>
+      <button type="button" id="tr-makereport">다시 분석</button>
     </div>
-    <p class="meta" style="margin:6px 0 0">수집된 쇼츠에서 뜨는 주제·훅·포맷을 묶어 분석합니다.</p>
+    <p class="meta" style="margin:6px 0 0">탭을 열면 최신 수집분으로 자동 분석합니다 —
+    뜨는 주제·반복되는 훅·포맷을 묶어 보여줍니다.</p>
   </div>
   <div id="tr-report"></div>
 </div>
@@ -4800,6 +4805,7 @@ TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
   });
 
   // ---------- 피드
+  var autoTried = false;
   function loadFeed() {
     var sort = $("tr-sort").value;
     fetch("/api/trends/videos?sort=" + sort + (activeKw ? "&keyword=" + encodeURIComponent(activeKw) : ""))
@@ -4809,8 +4815,14 @@ TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
         grid.innerHTML = "";
         if (!d.ok) { setStatus("tr-status", d.error, true); return; }
         $("tr-last").textContent = d.last ? "마지막 수집: " + String(d.last).slice(0, 16).replace("T", " ") : "";
+        // 처음이거나 6시간 넘었으면 알아서 새로 모은다
+        if ((!d.items.length || d.stale) && !autoTried) {
+          autoTried = true;
+          collectNow(true);
+          return;
+        }
         if (!d.items.length) {
-          grid.innerHTML = '<p class="meta">아직 수집된 영상이 없습니다. [새로 수집]을 눌러주세요.</p>';
+          grid.innerHTML = '<p class="meta">수집된 영상이 없습니다. [새로 수집]을 눌러주세요.</p>';
           return;
         }
         d.items.forEach(function (v) {
@@ -4844,17 +4856,57 @@ TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
       }).catch(function () {});
   }
   $("tr-sort").addEventListener("change", loadFeed);
-  $("tr-collect").addEventListener("click", function () {
-    var b = this;
+  function collectNow(auto) {
+    var b = $("tr-collect");
     b.disabled = true;
-    setStatus("tr-status", "유튜브에서 수집 중… (10~20초)");
-    post("/api/trends/collect").then(function (d) {
+    setStatus("tr-status", (auto ? "최신 트렌드를 자동으로 모으는 중" : "유튜브에서 수집 중") + "… (10~20초)");
+    return post("/api/trends/collect").then(function (d) {
       b.disabled = false;
       if (!d.ok) { setStatus("tr-status", d.error || "수집 실패", true); return; }
       setStatus("tr-status", "새 영상 " + d.saved + "건 수집 완료"
         + (d.errors && d.errors.length ? " · " + d.errors.join(" / ") : ""));
       loadFeed();
     }).catch(function () { b.disabled = false; setStatus("tr-status", "네트워크 오류", true); });
+  }
+  $("tr-collect").addEventListener("click", function () { collectNow(false); });
+
+  // ---------- AI 키워드 추천
+  $("tr-suggest").addEventListener("click", function () {
+    var b = this;
+    b.disabled = true;
+    var box = $("tr-suggest-box");
+    box.innerHTML = '<p class="meta">지금 뜨는 소재에서 키워드를 뽑는 중… (10~20초)</p>';
+    post("/api/trends/suggest", { profile: localStorage.getItem("tr_profile") || "" })
+      .then(function (d) {
+        b.disabled = false;
+        if (!d.ok) { box.innerHTML = '<p class="error">' + (d.error || "실패") + "</p>"; return; }
+        box.innerHTML = "";
+        function group(title, items) {
+          if (!items || !items.length) return;
+          var wrap = el("div", "");
+          wrap.style.marginTop = "8px";
+          wrap.appendChild(el("div", "meta", title));
+          var row = el("div", "quick-slot");
+          items.forEach(function (it) {
+            var chip = el("button", "chip chip-save", "+ " + it.keyword);
+            chip.type = "button";
+            chip.title = it.why || "";
+            chip.addEventListener("click", function () {
+              chip.disabled = true;
+              post("/api/trends/keywords", { keyword: it.keyword }).then(function (res) {
+                if (!res.ok) { alert(res.error || "추가 실패"); chip.disabled = false; return; }
+                chip.textContent = it.keyword + " 추가됨 ✓";
+                loadKeywords();
+              });
+            });
+            row.appendChild(chip);
+          });
+          wrap.appendChild(row);
+          box.appendChild(wrap);
+        }
+        group("지금 쇼츠에서 뜨는 키워드", d.trending);
+        group("우리 사업에 맞는 추적 키워드", d.for_us);
+      }).catch(function () { b.disabled = false; });
   });
 
   // ---------- AI 리포트
@@ -4897,20 +4949,31 @@ TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
     card.appendChild(el("p", "meta", "생성: " + String(rep.created_at || "").slice(0, 16).replace("T", " ")));
     box.appendChild(card);
   }
+  var reportTried = false;
   function loadReport() {
     fetch("/api/trends/report").then(function (r) { return r.json(); })
-      .then(function (d) { if (d.ok) renderReport(d.report); }).catch(function () {});
+      .then(function (d) {
+        if (!d.ok) return;
+        if (!d.report && !reportTried) {  // 아직 리포트가 없으면 알아서 분석
+          reportTried = true;
+          makeReport(true);
+          return;
+        }
+        renderReport(d.report);
+      }).catch(function () {});
   }
-  $("tr-makereport").addEventListener("click", function () {
-    var b = this;
+  function makeReport(auto) {
+    var b = $("tr-makereport");
     b.disabled = true;
-    $("tr-report").innerHTML = '<p class="meta">분석 중… (10~20초)</p>';
-    post("/api/trends/report").then(function (d) {
+    $("tr-report").innerHTML = '<p class="meta">'
+      + (auto ? "최신 수집분으로 자동 분석 중" : "분석 중") + "… (10~20초)</p>";
+    return post("/api/trends/report").then(function (d) {
       b.disabled = false;
       if (!d.ok) { $("tr-report").innerHTML = '<p class="error">' + (d.error || "실패") + "</p>"; return; }
       renderReport(d.report);
     }).catch(function () { b.disabled = false; });
-  });
+  }
+  $("tr-makereport").addEventListener("click", function () { makeReport(false); });
 
   // ---------- 아이디어
   function renderIdeas(rep) {
@@ -4956,6 +5019,7 @@ TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
   }
   $("tr-makeidea").addEventListener("click", function () {
     var b = this;
+    try { localStorage.setItem("tr_profile", $("tr-profile").value || ""); } catch (e) {}
     b.disabled = true;
     $("tr-ideas").innerHTML = '<p class="meta">기획안 작성 중… (10~20초)</p>';
     post("/api/trends/ideas", { profile: $("tr-profile").value }).then(function (d) {
@@ -5054,8 +5118,30 @@ def api_trends_videos(request: Request, sort: str = Query("speed"),
         return {"ok": False, "error": "권한이 없습니다."}
     try:
         return {"ok": True, "items": trends.list_videos(user, keyword, sort),
-                "last": trends.last_collected(user)}
+                "last": trends.last_collected(user),
+                "stale": trends.needs_refresh(user)}
     except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/trends/suggest")
+def api_trends_suggest(request: Request, body: dict = Body(...)):
+    """수집된 인기 쇼츠 + 회사 정보 → 추적할 키워드 추천."""
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    profile = str(body.get("profile") or "")
+    try:
+        if not profile:
+            saved = trends.latest_report(user, "ideas")
+            profile = (saved or {}).get("data", {}).get("profile", "")
+        if trends.needs_refresh(user):
+            trends.collect(user)
+        videos = trends.recent_for_ai(user)
+        data = summarize.gemini_keyword_suggestions(videos, profile)
+        trends.save_report(user, "suggest", data)
+        return {"ok": True, **data}
+    except (trends.TrendError, store.StoreError, summarize.SummarizeError) as e:
         return {"ok": False, "error": str(e)}
 
 
