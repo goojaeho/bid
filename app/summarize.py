@@ -451,11 +451,12 @@ KEYWORD_PROMPT = """아래는 지금 __REGION__에서 인기인 쇼츠 제목·�
  "for_us": [{"keyword": "우리 사업과 맞닿은 키워드", "why": "왜 우리에게 유용한지 한 줄"}]}
 
 trending은 실제 목록에서 반복되는 소재·표현에서 5개를 뽑고,
-for_us는 회사 정보를 반영해 5개를 제안하세요.
+for_us는 아래 채널들이 "다음 영상 소재"로 쓸 만한 키워드를 5개 제안하세요.
+밈·일회성 유행어가 아니라, 그 채널 포맷으로 반복 제작할 수 있는 소재여야 합니다.
 키워드는 유튜브 검색에 바로 쓸 수 있게 짧은 말로 쓰되, __REGION__ 시청자가 실제로 검색할 언어로 쓰세요
 (한국이면 한국어, 글로벌이면 영어).
 
-[회사 정보]
+[운영 중인 채널]
 __PROFILE__
 
 [지금 인기 쇼츠]
@@ -508,6 +509,9 @@ TREND_PROMPT = """다음은 최근 __REGION__에서 조회수가 빠르게 오�
 themes는 3~5개, hooks는 3~5개, formats는 2~4개. 단순 나열이 아니라
 '구독자 대비 배수가 높은 영상'에서 공통점을 찾아 설명하세요.
 
+중요: 한 번 쓰고 끝나는 밈·챌린지·특정 연예인 이슈는 빼고,
+계속 반복해서 제작할 수 있는 '포맷·서사 구조·훅 설계' 관점으로 분석하세요.
+
 쇼츠 목록:
 """
 
@@ -541,19 +545,24 @@ def gemini_trend_report(videos: list[dict], region_label: str = "한국") -> dic
     }
 
 
-IDEA_PROMPT = """아래는 지금 뜨는 쇼츠 트렌드 분석 결과와, 콘텐츠를 만들려는 회사 정보입니다.
-이 트렌드를 우리 회사 콘텐츠에 적용한 쇼츠·릴스 기획안을 JSON으로만 제안하세요. 한국어로 씁니다.
+IDEA_PROMPT = """아래는 지금 뜨는 쇼츠 트렌드 분석 결과와, 콘텐츠를 만드는 사람이 운영 중인 채널 정보입니다.
+각 채널의 기존 포맷을 그대로 유지하면서, 지금 트렌드를 반영한 다음 영상 기획안을 JSON으로만 제안하세요. 한국어로 씁니다.
 
-{"ideas": [{"title": "영상 제목(후킹되게, 30자 내외)",
+{"ideas": [{"channel": "어느 채널용인지 (채널 이름 그대로)",
+            "title": "영상 제목(후킹되게, 30자 내외)",
             "hook": "첫 3초에 나올 말이나 장면",
             "outline": ["구성 1", "구성 2", "구성 3"],
-            "why": "이 트렌드의 어떤 점을 빌렸는지 한 줄",
+            "trend_link": "이번 트렌드의 어떤 요소를 가져왔는지 한 줄",
             "cta": "마지막에 유도할 행동"}]}
 
-ideas는 5개. 실제로 촬영 가능한 수준으로 구체적으로 쓰고, 유행 포맷을 그대로 베끼지 말고
-우리 회사 맥락에 맞게 변형하세요.
+규칙:
+- 등록된 채널이 여러 개면 채널마다 고르게 배분해서 총 6개를 제안하세요.
+- 유행하는 밈·챌린지를 그대로 따라 하는 기획은 금지입니다.
+  트렌드에서 '훅 구조·서사 전개·편집 리듬'만 빌려와 우리 채널 세계관 안에서 변형하세요.
+- 그 채널이 지금까지 해온 포맷(등장인물·톤·세계관)을 벗어나는 제안은 하지 마세요.
+- 실제로 제작 가능한 수준까지 구체적으로 쓰세요.
 
-[회사 정보]
+[운영 중인 채널]
 __PROFILE__
 
 [트렌드 분석]
@@ -564,7 +573,8 @@ __TREND__
 def gemini_content_ideas(trend: dict, profile: str) -> list[dict]:
     """트렌드 + 회사 소개 → 콘텐츠 기획안 5개."""
     payload = json.dumps(trend, ensure_ascii=False)[:4000]
-    prompt = (IDEA_PROMPT.replace("__PROFILE__", (profile or "AI·콘텐츠 분야 스타트업")[:800])
+    prompt = (IDEA_PROMPT
+              .replace("__PROFILE__", (profile or "(채널 정보 미등록)")[:1500])
               .replace("__TREND__", payload))
     data = _gemini_call({
         "contents": [{"parts": [{"text": prompt}]}],
@@ -576,12 +586,13 @@ def gemini_content_ideas(trend: dict, profile: str) -> list[dict]:
         raise SummarizeError("아이디어 생성 실패 — 다시 시도해주세요.")
     ideas = out.get("ideas") if isinstance(out, dict) else out
     return [{
+        "channel": str(i.get("channel", ""))[:100],
         "title": str(i.get("title", ""))[:200],
         "hook": str(i.get("hook", ""))[:300],
         "outline": [str(o)[:200] for o in (i.get("outline") or [])][:6],
-        "why": str(i.get("why", ""))[:300],
+        "why": str(i.get("trend_link") or i.get("why", ""))[:300],
         "cta": str(i.get("cta", ""))[:200],
-    } for i in (ideas or []) if isinstance(i, dict)][:6]
+    } for i in (ideas or []) if isinstance(i, dict)][:8]
 
 
 REF_PROMPT = """아래는 참고하려는 쇼츠·릴스 영상의 정보입니다.

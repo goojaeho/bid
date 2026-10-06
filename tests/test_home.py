@@ -1050,6 +1050,61 @@ class TrendTest(unittest.TestCase):
                              json={"region": "KR"})
         self.assertEqual(saved["kind"], "report")
 
+    def test_profile_save_cleans_rows(self):
+        saved = {}
+        with patch.object(trends, "save_report",
+                          side_effect=lambda e, k, d: saved.update(kind=k, data=d)):
+            out = trends.save_profile(
+                "e@x.com",
+                [{"name": " dollypop.ai ", "format": " AI 가상 인물 ", "url": "u1"},
+                 {"name": "", "format": "", "url": "버려짐"},
+                 "문자열은 무시",
+                 {"name": "whileshesout.tv", "format": "엿보기 시리즈"}],
+                note="  밈 따라하기 금지  ")
+        self.assertEqual(saved["kind"], "profile")
+        self.assertEqual([c["name"] for c in out["channels"]],
+                         ["dollypop.ai", "whileshesout.tv"])  # 빈 줄·문자열 제거
+        self.assertEqual(out["channels"][0]["format"], "AI 가상 인물")
+        self.assertEqual(out["note"], "밈 따라하기 금지")
+
+    def test_profile_text_for_prompt(self):
+        text = trends.profile_text({
+            "channels": [{"name": "dollypop.ai", "format": "AI 가상 인물 브이로그",
+                          "url": "https://instagram.com/dollypop.ai"}],
+            "note": "밈 금지"})
+        self.assertIn("- dollypop.ai / AI 가상 인물 브이로그 / "
+                      "https://instagram.com/dollypop.ai", text)
+        self.assertIn("추가 메모: 밈 금지", text)
+
+    def test_ideas_use_registered_channels(self):
+        """기획안은 클라이언트 입력이 아니라 저장된 채널 포맷을 기준으로 뽑는다."""
+        profile = {"channels": [{"name": "dollypop.ai", "format": "AI 가상 인물",
+                                 "url": ""}], "note": ""}
+        got = {}
+        ideas = [{"channel": "dollypop.ai", "title": "기획", "hook": "훅",
+                  "outline": ["1"], "trend_link": "포맷만 차용", "cta": "팔로우"}]
+        with patch.object(trends, "get_profile", return_value=profile), \
+             patch.object(trends, "latest_report",
+                          return_value={"data": {"takeaway": "핵심"}}), \
+             patch.object(summarize, "gemini_content_ideas",
+                          side_effect=lambda t, p: got.update(trend=t, profile=p) or ideas), \
+             patch.object(trends, "save_report",
+                          side_effect=lambda e, k, d: {"kind": k, "data": d}):
+            r = self.client.post("/api/trends/ideas", cookies=self.admin_cookie,
+                                 json={"region": "KR", "profile": "무시되어야 함"})
+        d = r.json()
+        self.assertTrue(d["ok"])
+        self.assertIn("dollypop.ai", got["profile"])
+        self.assertNotIn("무시되어야 함", got["profile"])
+        self.assertEqual(d["report"]["data"]["ideas"][0]["channel"], "dollypop.ai")
+
+    def test_page_has_channel_registration(self):
+        os.environ["YOUTUBE_API_KEY"] = "ytkey"
+        r = self.client.get("/trends", cookies=self.admin_cookie)
+        for marker in ("내 채널", "ch-list", "ch-save", "tr-makeidea",
+                       "트렌드 반영 기획안 받기"):
+            self.assertIn(marker, r.text, marker)
+
 
 if __name__ == "__main__":
     unittest.main()

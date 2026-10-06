@@ -393,3 +393,43 @@ def list_refs(email: str, limit: int = 30) -> list[dict]:
 def delete_ref(email: str, ref_id: int) -> None:
     todos._request("DELETE", "trend_refs",
                    params={"email": f"eq.{email}", "id": f"eq.{ref_id}"})
+
+
+# ------------------------------------------------- 내 채널 프로필
+
+def get_profile(email: str) -> dict:
+    """등록해둔 내 채널 목록 + 메모 (아이디어·키워드 추천의 기준)."""
+    rep = latest_report(email, "profile")
+    data = (rep or {}).get("data") or {}
+    return {"channels": data.get("channels") or [], "note": data.get("note", "")}
+
+
+def save_profile(email: str, channels: list, note: str = "") -> dict:
+    cleaned = []
+    for ch in (channels or [])[:10]:
+        if not isinstance(ch, dict):
+            continue
+        name = str(ch.get("name") or "").strip()[:100]
+        fmt = str(ch.get("format") or "").strip()[:500]
+        if not name and not fmt:
+            continue
+        cleaned.append({"name": name, "url": str(ch.get("url") or "").strip()[:300],
+                        "format": fmt})
+    data = {"channels": cleaned, "note": str(note or "").strip()[:800]}
+    save_report(email, "profile", data)
+    return data
+
+
+def profile_text(profile: dict) -> str:
+    """AI 프롬프트에 넣을 채널 설명 문자열."""
+    lines = []
+    for ch in profile.get("channels", []):
+        bits = [ch.get("name", "")]
+        if ch.get("format"):
+            bits.append(ch["format"])
+        if ch.get("url"):
+            bits.append(ch["url"])
+        lines.append("- " + " / ".join([b for b in bits if b]))
+    if profile.get("note"):
+        lines.append("추가 메모: " + profile["note"])
+    return "\n".join(lines)

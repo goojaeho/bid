@@ -4654,17 +4654,26 @@ TRENDS_PAGE = """<div class="row" style="margin-bottom:12px;justify-content:spac
       <button type="button" id="tr-makereport">다시 분석</button>
     </div>
     <p class="meta" style="margin:6px 0 0">탭을 열면 최신 수집분으로 자동 분석합니다 —
-    뜨는 주제·반복되는 훅·포맷을 묶어 보여줍니다.</p>
+    뜨는 주제·반복되는 훅·포맷을 모아 보여줍니다.</p>
   </div>
   <div id="tr-report"></div>
 </div>
 
 <div id="pane-idea" hidden>
   <div class="card">
-    <b style="font-size:0.95rem">콘텐츠 아이디어 생성</b>
-    <p class="meta" style="margin:6px 0 8px">우리 회사·서비스를 적어두면 트렌드에 맞춘 기획안을 만들어줍니다.</p>
-    <textarea id="tr-profile" rows="3" placeholder="예: 멜라카 — AI 기반 콘텐츠 제작 솔루션 GENDIA 운영. 타깃은 중소기업 마케터와 투자자."></textarea>
-    <button type="button" id="tr-makeidea">아이디어 5개 생성</button>
+    <div class="row" style="justify-content:space-between">
+      <b style="font-size:0.95rem">내 채널</b>
+      <button type="button" id="ch-add" class="chip chip-save">+ 채널 추가</button>
+    </div>
+    <p class="meta" style="margin:6px 0 8px">운영 중인 채널의 포맷을 적어두면,
+    그 틀 안에서만 기획안을 뽑습니다 — 유행 밈을 그대로 따라 하지 않고 훅·서사 구조만 빌려옵니다.</p>
+    <div id="ch-list"></div>
+    <textarea id="tr-note" rows="2" placeholder="공통 메모 (선택) — 피해야 할 소재, 타깃, 톤앤매너 등"></textarea>
+    <div class="row">
+      <button type="button" id="ch-save" class="chip chip-save">채널 정보 저장</button>
+      <button type="button" id="tr-makeidea">트렌드 반영 기획안 받기</button>
+      <span id="ch-status" class="meta" style="margin:0"></span>
+    </div>
   </div>
   <div id="tr-ideas"></div>
 </div>
@@ -4912,8 +4921,7 @@ TRENDS_PAGE = """<div class="row" style="margin-bottom:12px;justify-content:spac
     b.disabled = true;
     var box = $("tr-suggest-box");
     box.innerHTML = '<p class="meta">지금 뜨는 소재에서 키워드를 뽑는 중… (10~20초)</p>';
-    post("/api/trends/suggest", { profile: localStorage.getItem("tr_profile") || "",
-                                  region: region })
+    post("/api/trends/suggest", { region: region })
       .then(function (d) {
         b.disabled = false;
         if (!d.ok) { box.innerHTML = '<p class="error">' + (d.error || "실패") + "</p>"; return; }
@@ -5021,9 +5029,13 @@ TRENDS_PAGE = """<div class="row" style="margin-bottom:12px;justify-content:spac
       box.innerHTML = '<p class="meta">아직 생성된 아이디어가 없습니다.</p>';
       return;
     }
-    if (rep.data.profile) $("tr-profile").value = rep.data.profile;
     rep.data.ideas.forEach(function (idea) {
       var card = el("div", "idea-card");
+      if (idea.channel) {
+        var badge = el("span", "chip chip-user", idea.channel);
+        badge.style.cssText = "font-size:0.74rem;padding:3px 10px";
+        card.appendChild(badge);
+      }
       card.appendChild(el("h4", "", idea.title || ""));
       if (idea.hook) {
         var hk = el("div", "", "훅: " + idea.hook);
@@ -5051,17 +5063,77 @@ TRENDS_PAGE = """<div class="row" style="margin-bottom:12px;justify-content:spac
       box.appendChild(card);
     });
   }
+  // ---------- 내 채널 등록
+  var SEED_CHANNELS = [
+    { name: "dollypop.ai", url: "https://www.instagram.com/dollypop.ai", format: "" },
+    { name: "whileshesout.tv", url: "https://www.instagram.com/whileshesout.tv", format: "" }
+  ];
+  function channelRow(ch) {
+    var row = el("div", "row");
+    row.style.marginTop = "6px";
+    var name = el("input", "");
+    name.type = "text";
+    name.placeholder = "채널 이름 (예: dollypop.ai)";
+    name.value = (ch && ch.name) || "";
+    name.style.cssText = "flex:0 1 180px;min-width:130px";
+    var fmt = el("input", "");
+    fmt.type = "text";
+    fmt.placeholder = "포맷 한 줄 (예: AI로 만든 가상 인물이 하루를 보여주는 세로 영상)";
+    fmt.value = (ch && ch.format) || "";
+    fmt.style.cssText = "flex:1;min-width:200px";
+    var url = el("input", "");
+    url.type = "text";
+    url.placeholder = "채널 URL";
+    url.value = (ch && ch.url) || "";
+    url.style.cssText = "flex:0 1 200px;min-width:140px";
+    var del = el("button", "link-btn", "삭제");
+    del.type = "button";
+    del.addEventListener("click", function () { row.remove(); });
+    [name, fmt, url, del].forEach(function (e) { row.appendChild(e); });
+    row.getValue = function () {
+      return { name: name.value, format: fmt.value, url: url.value };
+    };
+    return row;
+  }
+  function loadProfile() {
+    fetch("/api/trends/profile").then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) return;
+        var box = $("ch-list");
+        box.innerHTML = "";
+        var chans = (d.profile && d.profile.channels) || [];
+        if (!chans.length) chans = SEED_CHANNELS;
+        chans.forEach(function (ch) { box.appendChild(channelRow(ch)); });
+        $("tr-note").value = (d.profile && d.profile.note) || "";
+      }).catch(function () {});
+  }
+  $("ch-add").addEventListener("click", function () {
+    $("ch-list").appendChild(channelRow(null));
+  });
+  function saveProfile() {
+    var rows = Array.prototype.slice.call($("ch-list").children);
+    var channels = rows.map(function (r) { return r.getValue(); })
+      .filter(function (c) { return c.name || c.format; });
+    return post("/api/trends/profile", { channels: channels, note: $("tr-note").value })
+      .then(function (d) {
+        $("ch-status").textContent = d.ok ? "저장됨 ✓" : (d.error || "저장 실패");
+        return d;
+      });
+  }
+  $("ch-save").addEventListener("click", saveProfile);
+
   function loadIdeas() {
+    loadProfile();
     fetch("/api/trends/ideas").then(function (r) { return r.json(); })
       .then(function (d) { if (d.ok) renderIdeas(d.report); }).catch(function () {});
   }
   $("tr-makeidea").addEventListener("click", function () {
     var b = this;
-    try { localStorage.setItem("tr_profile", $("tr-profile").value || ""); } catch (e) {}
     b.disabled = true;
-    $("tr-ideas").innerHTML = '<p class="meta">기획안 작성 중… (10~20초)</p>';
-    post("/api/trends/ideas", { profile: $("tr-profile").value, region: region })
-      .then(function (d) {
+    $("tr-ideas").innerHTML = '<p class="meta">채널 포맷에 맞춰 기획 중… (10~20초)</p>';
+    saveProfile().then(function () {
+      return post("/api/trends/ideas", { region: region });
+    }).then(function (d) {
       b.disabled = false;
       if (!d.ok) { $("tr-ideas").innerHTML = '<p class="error">' + (d.error || "실패") + "</p>"; return; }
       renderIdeas(d.report);
@@ -5171,12 +5243,9 @@ def api_trends_suggest(request: Request, body: dict = Body(...)):
     user = _admin_user(request)
     if not user:
         return {"ok": False, "error": "권한이 없습니다."}
-    profile = str(body.get("profile") or "")
     region = str(body.get("region") or "KR")
     try:
-        if not profile:
-            saved = trends.latest_report(user, "ideas")
-            profile = (saved or {}).get("data", {}).get("profile", "")
+        profile = trends.profile_text(trends.get_profile(user))
         if trends.needs_refresh(user, region=region):
             trends.collect(user, region=region)
         videos = trends.recent_for_ai(user, region=region)
@@ -5283,9 +5352,9 @@ def api_trends_ideas_make(request: Request, body: dict = Body(...)):
     user = _admin_user(request)
     if not user:
         return {"ok": False, "error": "권한이 없습니다."}
-    profile = str(body.get("profile") or "")
     region = str(body.get("region") or "KR")
     try:
+        profile = trends.profile_text(trends.get_profile(user))
         report = trends.latest_report(user, _report_kind(region))
         trend = report["data"] if report else None
         if not trend:
@@ -5295,9 +5364,33 @@ def api_trends_ideas_make(request: Request, body: dict = Body(...)):
             trends.save_report(user, _report_kind(region), trend)
         ideas = summarize.gemini_content_ideas(trend, profile)
         saved = trends.save_report(user, "ideas",
-                                   {"ideas": ideas, "profile": profile})
+                                   {"ideas": ideas, "region": region})
         return {"ok": True, "report": saved}
     except (store.StoreError, summarize.SummarizeError) as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/trends/profile")
+def api_trends_profile_get(request: Request):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        return {"ok": True, "profile": trends.get_profile(user)}
+    except store.StoreError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/trends/profile")
+def api_trends_profile_save(request: Request, body: dict = Body(...)):
+    user = _admin_user(request)
+    if not user:
+        return {"ok": False, "error": "권한이 없습니다."}
+    try:
+        saved = trends.save_profile(user, body.get("channels") or [],
+                                    str(body.get("note") or ""))
+        return {"ok": True, "profile": saved}
+    except store.StoreError as e:
         return {"ok": False, "error": str(e)}
 
 
