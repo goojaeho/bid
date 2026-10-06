@@ -23,6 +23,20 @@ KST = ZoneInfo("Asia/Seoul")
 TIMEOUT = 15
 YT = "https://www.googleapis.com/youtube/v3"
 SHORTS_MAX_SEC = 180  # 쇼츠 = 3분 이하
+# 글로벌은 단일 차트가 없어 주요 시장 3곳을 합쳐 본다 (videos.list는 1단위라 저렴)
+REGIONS = {
+    "KR": {"label": "한국", "charts": ["KR"], "search": "KR", "lang": "ko"},
+    "GLOBAL": {"label": "글로벌", "charts": ["US", "GB", "JP"], "search": "US",
+               "lang": "en"},
+}
+
+
+def region_conf(region: str) -> dict:
+    return REGIONS.get((region or "KR").upper(), REGIONS["KR"])
+
+
+def region_label(region: str) -> str:
+    return region_conf(region)["label"]
 VIDEO_FIELDS = ("id,video_id,title,channel,channel_subs,views,likes,comments,"
                 "duration_sec,published_at,thumb,keyword,source,collected_at")
 
@@ -93,7 +107,7 @@ def viral_score(views: int, subs: int) -> float:
 
 
 def _rows_from_items(items: list[dict], subs_map: dict, keyword: str,
-                     source: str) -> list[dict]:
+                     source: str, region: str = "KR") -> list[dict]:
     rows = []
     for v in items:
         snip = v.get("snippet") or {}
@@ -118,6 +132,7 @@ def _rows_from_items(items: list[dict], subs_map: dict, keyword: str,
             "thumb": thumb,
             "keyword": keyword[:100],
             "source": source,
+            "region": (region or "KR").upper(),
             "tags": (snip.get("tags") or [])[:15],
             "description": (snip.get("description") or "")[:600],
         })
@@ -138,24 +153,29 @@ def _channel_subs(channel_ids: list[str]) -> dict:
 # ------------------------------------------------------------ 수집
 
 def fetch_popular(region: str = "KR", limit: int = 50) -> list[dict]:
-    """인기 급상승 중 쇼츠 (1 단위)."""
-    data = _get("videos", part="snippet,statistics,contentDetails",
-                chart="mostPopular", regionCode=region,
-                maxResults=min(limit, 50))
-    items = data.get("items", [])
+    """인기 급상승 중 쇼츠 (차트당 1 단위). 글로벌은 미국·영국·일본을 합산."""
+    conf = region_conf(region)
+    items: list[dict] = []
+    for code in conf["charts"]:
+        data = _get("videos", part="snippet,statistics,contentDetails",
+                    chart="mostPopular", regionCode=code,
+                    maxResults=min(limit, 50))
+        items += data.get("items", [])
     subs = _channel_subs([(v.get("snippet") or {}).get("channelId", "")
                           for v in items])
-    return _rows_from_items(items, subs, "", "popular")
+    return _rows_from_items(items, subs, "", "popular", region)
 
 
-def fetch_keyword(keyword: str, days: int = 7, limit: int = 20) -> list[dict]:
+def fetch_keyword(keyword: str, days: int = 7, limit: int = 20,
+                  region: str = "KR") -> list[dict]:
     """키워드별 최근 인기 쇼츠 (search 100 + videos/channels 2 단위)."""
+    conf = region_conf(region)
     after = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
         "%Y-%m-%dT%H:%M:%SZ")
     found = _get("search", part="snippet", q=keyword, type="video",
                  videoDuration="short", order="viewCount",
-                 publishedAfter=after, regionCode="KR",
-                 relevanceLanguage="ko", maxResults=min(limit, 50))
+                 publishedAfter=after, regionCode=conf["search"],
+                 relevanceLanguage=conf["lang"], maxResults=min(limit, 50))
     ids = [(i.get("id") or {}).get("videoId", "") for i in found.get("items", [])]
     ids = [i for i in ids if i]
     if not ids:
@@ -165,22 +185,24 @@ def fetch_keyword(keyword: str, days: int = 7, limit: int = 20) -> list[dict]:
     items = data.get("items", [])
     subs = _channel_subs([(v.get("snippet") or {}).get("channelId", "")
                           for v in items])
-    return _rows_from_items(items, subs, keyword, "search")
+    return _rows_from_items(items, subs, keyword, "search", region)
 
 
-def collect(email: str, keywords: list[str] | None = None) -> dict:
+def collect(email: str, keywords: list[str] | None = None,
+            region: str = "KR") -> dict:
     """인기 급상승 + 키워드별 수집 → 저장. 수집 건수 반환."""
+    region = (region or "KR").upper()
     kws = keywords if keywords is not None else [
-        k["keyword"] for k in list_keywords(email)]
+        k["keyword"] for k in list_keywords(email, region)]
     rows: list[dict] = []
     errors: list[str] = []
     try:
-        rows += fetch_popular()
+        rows += fetch_popular(region)
     except TrendError as e:
         errors.append(str(e))
     for kw in kws[:10]:
         try:
-            rows += fetch_keyword(kw)
+            rows += fetch_keyword(kw, region=region)
         except TrendError as e:
             errors.append(f"{kw}: {e}")
             break  # 할당량 소진 등 — 더 시도하지 않음
@@ -212,8 +234,9 @@ def save_videos(email: str, rows: list[dict]) -> int:
 
 
 def list_videos(email: str, keyword: str = "", sort: str = "speed",
-                limit: int = 60) -> list[dict]:
-    params = {"select": VIDEO_FIELDS + ",tags,description", "email": f"eq.{email}",
+                limit: int = 60, region: str = "KR") -> list[dict]:
+    params = {"select": VIDEO_FIELDS + ",tags,description,region",
+              "email": f"eq.{email}", "region": f"eq.{(region or 'KR').upper()}",
               "order": "views.desc", "limit": str(min(limit, 200))}
     if keyword:
         params["keyword"] = f"eq.{keyword}"
@@ -230,18 +253,19 @@ def list_videos(email: str, keyword: str = "", sort: str = "speed",
     return rows
 
 
-def recent_for_ai(email: str, limit: int = 40) -> list[dict]:
+def recent_for_ai(email: str, limit: int = 40, region: str = "KR") -> list[dict]:
     """AI 분석용 — 최근 수집분 중 속도 상위."""
-    rows = list_videos(email, sort="speed", limit=120)
+    rows = list_videos(email, sort="speed", limit=120, region=region)
     return rows[:limit]
 
 
 AUTO_REFRESH_HOURS = 6
 
 
-def needs_refresh(email: str, hours: int = AUTO_REFRESH_HOURS) -> bool:
+def needs_refresh(email: str, hours: int = AUTO_REFRESH_HOURS,
+                  region: str = "KR") -> bool:
     """마지막 수집이 N시간을 넘었으면 (또는 한 번도 없으면) 자동 수집 대상."""
-    last = last_collected(email)
+    last = last_collected(email, region)
     if not last:
         return True
     try:
@@ -253,10 +277,11 @@ def needs_refresh(email: str, hours: int = AUTO_REFRESH_HOURS) -> bool:
     return (datetime.now(KST) - when) > timedelta(hours=hours)
 
 
-def last_collected(email: str) -> str | None:
+def last_collected(email: str, region: str = "KR") -> str | None:
     rows = todos._request(
         "GET", "trend_videos",
         params={"select": "collected_at", "email": f"eq.{email}",
+                "region": f"eq.{(region or 'KR').upper()}",
                 "order": "collected_at.desc", "limit": "1"},
     ).json()
     return rows[0]["collected_at"] if rows else None
@@ -264,21 +289,22 @@ def last_collected(email: str) -> str | None:
 
 # ------------------------------------------------------------ 키워드
 
-def list_keywords(email: str) -> list[dict]:
-    rows = todos._request(
+def list_keywords(email: str, region: str = "KR") -> list[dict]:
+    return todos._request(
         "GET", "trend_keywords",
-        params={"select": "id,keyword,active", "email": f"eq.{email}",
+        params={"select": "id,keyword,active,region", "email": f"eq.{email}",
+                "region": f"eq.{(region or 'KR').upper()}",
                 "active": "is.true", "order": "created_at.asc", "limit": "30"},
     ).json()
-    return rows
 
 
-def add_keyword(email: str, keyword: str) -> dict:
+def add_keyword(email: str, keyword: str, region: str = "KR") -> dict:
     keyword = (keyword or "").strip()[:100]
     if not keyword:
         raise StoreError("키워드가 비어 있습니다.")
     resp = todos._request("POST", "trend_keywords",
-                          json={"email": email, "keyword": keyword},
+                          json={"email": email, "keyword": keyword,
+                                "region": (region or "KR").upper()},
                           headers={"Prefer": "return=representation"})
     return resp.json()[0]
 

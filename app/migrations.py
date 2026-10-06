@@ -264,6 +264,12 @@ MIGRATIONS: list[tuple[int, str]] = [
         create index if not exists trend_refs_email_idx
           on trend_refs (email, created_at desc);
     """),
+    (16, """
+        alter table trend_videos add column if not exists region text not null default 'KR';
+        alter table trend_keywords add column if not exists region text not null default 'KR';
+        create index if not exists trend_videos_region_idx
+          on trend_videos (email, region, collected_at desc);
+    """),
 ]
 
 _ran = False

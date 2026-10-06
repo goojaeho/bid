@@ -4606,11 +4606,17 @@ Google Cloud 콘솔</a>에서 기존 프로젝트(oneaigen-mail) 선택 → <b>Y
 3. Vercel 환경변수 <b>YOUTUBE_API_KEY</b>에 붙여넣고 Redeploy<br>
 무료 한도는 하루 10,000단위이고, 이 기능은 1회 수집에 약 500단위만 씁니다.</p></div>"""
 
-TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
+TRENDS_PAGE = """<div class="row" style="margin-bottom:12px;justify-content:space-between">
+  <div class="seg" id="tr-tabs">
   <a href="#" data-tab="feed" class="on">트렌드</a>
   <a href="#" data-tab="report">AI 리포트</a>
   <a href="#" data-tab="idea">콘텐츠 아이디어</a>
   <a href="#" data-tab="ref">레퍼런스 분석</a>
+  </div>
+  <div class="seg" id="tr-region">
+    <a href="#" data-region="KR" class="on">🇰🇷 한국</a>
+    <a href="#" data-region="GLOBAL">🌍 글로벌</a>
+  </div>
 </div>
 
 <div id="pane-feed">
@@ -4738,6 +4744,35 @@ TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
       ? '<p class="' + (isError ? "error" : "meta") + '" style="margin:8px 0 0">' + msg + "</p>" : "";
   }
 
+  // ---------- 지역 (한국 / 글로벌)
+  var region = localStorage.getItem("tr_region") || "KR";
+  function applyRegionUI() {
+    $("tr-region").querySelectorAll("a").forEach(function (a) {
+      a.classList.toggle("on", a.dataset.region === region);
+    });
+    $("tr-newkw").placeholder = region === "GLOBAL"
+      ? "직접 추가 (예: AI tools, startup)" : "직접 추가 (예: IR, 전시회)";
+  }
+  function qs(extra) {
+    return "region=" + region + (extra || "");
+  }
+  $("tr-region").addEventListener("click", function (e) {
+    var a = e.target.closest("a[data-region]");
+    if (!a) return;
+    e.preventDefault();
+    region = a.dataset.region;
+    try { localStorage.setItem("tr_region", region); } catch (err) {}
+    applyRegionUI();
+    activeKw = "";
+    autoTried = false;
+    reportTried = false;
+    $("tr-suggest-box").innerHTML = "";
+    setStatus("tr-status", "");
+    loadKeywords();
+    loadFeed();
+    if (!$("pane-report").hidden) loadReport();
+  });
+
   // ---------- 탭
   $("tr-tabs").addEventListener("click", function (e) {
     var a = e.target.closest("a[data-tab]");
@@ -4755,7 +4790,7 @@ TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
   // ---------- 키워드
   var activeKw = "";
   function loadKeywords() {
-    fetch("/api/trends/keywords").then(function (r) { return r.json(); })
+    fetch("/api/trends/keywords?" + qs()).then(function (r) { return r.json(); })
       .then(function (d) {
         var box = $("tr-kws");
         box.innerHTML = "";
@@ -4797,7 +4832,7 @@ TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
   $("tr-addkw").addEventListener("click", function () {
     var v = $("tr-newkw").value.trim();
     if (!v) return;
-    post("/api/trends/keywords", { keyword: v }).then(function (d) {
+    post("/api/trends/keywords", { keyword: v, region: region }).then(function (d) {
       if (!d.ok) { alert(d.error || "추가 실패"); return; }
       $("tr-newkw").value = "";
       loadKeywords();
@@ -4808,7 +4843,8 @@ TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
   var autoTried = false;
   function loadFeed() {
     var sort = $("tr-sort").value;
-    fetch("/api/trends/videos?sort=" + sort + (activeKw ? "&keyword=" + encodeURIComponent(activeKw) : ""))
+    fetch("/api/trends/videos?" + qs("&sort=" + sort
+      + (activeKw ? "&keyword=" + encodeURIComponent(activeKw) : "")))
       .then(function (r) { return r.json(); })
       .then(function (d) {
         var grid = $("tr-grid");
@@ -4860,7 +4896,7 @@ TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
     var b = $("tr-collect");
     b.disabled = true;
     setStatus("tr-status", (auto ? "최신 트렌드를 자동으로 모으는 중" : "유튜브에서 수집 중") + "… (10~20초)");
-    return post("/api/trends/collect").then(function (d) {
+    return post("/api/trends/collect", { region: region }).then(function (d) {
       b.disabled = false;
       if (!d.ok) { setStatus("tr-status", d.error || "수집 실패", true); return; }
       setStatus("tr-status", "새 영상 " + d.saved + "건 수집 완료"
@@ -4876,7 +4912,8 @@ TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
     b.disabled = true;
     var box = $("tr-suggest-box");
     box.innerHTML = '<p class="meta">지금 뜨는 소재에서 키워드를 뽑는 중… (10~20초)</p>';
-    post("/api/trends/suggest", { profile: localStorage.getItem("tr_profile") || "" })
+    post("/api/trends/suggest", { profile: localStorage.getItem("tr_profile") || "",
+                                  region: region })
       .then(function (d) {
         b.disabled = false;
         if (!d.ok) { box.innerHTML = '<p class="error">' + (d.error || "실패") + "</p>"; return; }
@@ -4893,7 +4930,8 @@ TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
             chip.title = it.why || "";
             chip.addEventListener("click", function () {
               chip.disabled = true;
-              post("/api/trends/keywords", { keyword: it.keyword }).then(function (res) {
+              post("/api/trends/keywords", { keyword: it.keyword, region: region })
+                .then(function (res) {
                 if (!res.ok) { alert(res.error || "추가 실패"); chip.disabled = false; return; }
                 chip.textContent = it.keyword + " 추가됨 ✓";
                 loadKeywords();
@@ -4951,7 +4989,7 @@ TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
   }
   var reportTried = false;
   function loadReport() {
-    fetch("/api/trends/report").then(function (r) { return r.json(); })
+    fetch("/api/trends/report?" + qs()).then(function (r) { return r.json(); })
       .then(function (d) {
         if (!d.ok) return;
         if (!d.report && !reportTried) {  // 아직 리포트가 없으면 알아서 분석
@@ -4967,7 +5005,7 @@ TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
     b.disabled = true;
     $("tr-report").innerHTML = '<p class="meta">'
       + (auto ? "최신 수집분으로 자동 분석 중" : "분석 중") + "… (10~20초)</p>";
-    return post("/api/trends/report").then(function (d) {
+    return post("/api/trends/report", { region: region }).then(function (d) {
       b.disabled = false;
       if (!d.ok) { $("tr-report").innerHTML = '<p class="error">' + (d.error || "실패") + "</p>"; return; }
       renderReport(d.report);
@@ -5022,7 +5060,8 @@ TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
     try { localStorage.setItem("tr_profile", $("tr-profile").value || ""); } catch (e) {}
     b.disabled = true;
     $("tr-ideas").innerHTML = '<p class="meta">기획안 작성 중… (10~20초)</p>';
-    post("/api/trends/ideas", { profile: $("tr-profile").value }).then(function (d) {
+    post("/api/trends/ideas", { profile: $("tr-profile").value, region: region })
+      .then(function (d) {
       b.disabled = false;
       if (!d.ok) { $("tr-ideas").innerHTML = '<p class="error">' + (d.error || "실패") + "</p>"; return; }
       renderIdeas(d.report);
@@ -5091,6 +5130,7 @@ TRENDS_PAGE = """<div class="seg" id="tr-tabs" style="margin-bottom:12px">
     }).catch(function () { b.disabled = false; setStatus("ref-status", "네트워크 오류", true); });
   });
 
+  applyRegionUI();
   loadKeywords();
   loadFeed();
 })();
@@ -5112,14 +5152,15 @@ def trends_page(request: Request):
 
 @app.get("/api/trends/videos")
 def api_trends_videos(request: Request, sort: str = Query("speed"),
-                      keyword: str = Query("")):
+                      keyword: str = Query(""), region: str = Query("KR")):
     user = _admin_user(request)
     if not user:
         return {"ok": False, "error": "권한이 없습니다."}
     try:
-        return {"ok": True, "items": trends.list_videos(user, keyword, sort),
-                "last": trends.last_collected(user),
-                "stale": trends.needs_refresh(user)}
+        return {"ok": True,
+                "items": trends.list_videos(user, keyword, sort, region=region),
+                "last": trends.last_collected(user, region),
+                "stale": trends.needs_refresh(user, region=region)}
     except store.StoreError as e:
         return {"ok": False, "error": str(e)}
 
@@ -5131,14 +5172,16 @@ def api_trends_suggest(request: Request, body: dict = Body(...)):
     if not user:
         return {"ok": False, "error": "권한이 없습니다."}
     profile = str(body.get("profile") or "")
+    region = str(body.get("region") or "KR")
     try:
         if not profile:
             saved = trends.latest_report(user, "ideas")
             profile = (saved or {}).get("data", {}).get("profile", "")
-        if trends.needs_refresh(user):
-            trends.collect(user)
-        videos = trends.recent_for_ai(user)
-        data = summarize.gemini_keyword_suggestions(videos, profile)
+        if trends.needs_refresh(user, region=region):
+            trends.collect(user, region=region)
+        videos = trends.recent_for_ai(user, region=region)
+        data = summarize.gemini_keyword_suggestions(
+            videos, profile, trends.region_label(region))
         trends.save_report(user, "suggest", data)
         return {"ok": True, **data}
     except (trends.TrendError, store.StoreError, summarize.SummarizeError) as e:
@@ -5146,23 +5189,24 @@ def api_trends_suggest(request: Request, body: dict = Body(...)):
 
 
 @app.post("/api/trends/collect")
-def api_trends_collect(request: Request):
+def api_trends_collect(request: Request, body: dict = Body(default={})):
     user = _admin_user(request)
     if not user:
         return {"ok": False, "error": "권한이 없습니다."}
+    region = str((body or {}).get("region") or "KR")
     try:
-        return {"ok": True, **trends.collect(user)}
+        return {"ok": True, **trends.collect(user, region=region)}
     except (trends.TrendError, store.StoreError) as e:
         return {"ok": False, "error": str(e)}
 
 
 @app.get("/api/trends/keywords")
-def api_trends_keywords(request: Request):
+def api_trends_keywords(request: Request, region: str = Query("KR")):
     user = _admin_user(request)
     if not user:
         return {"ok": False, "error": "권한이 없습니다."}
     try:
-        return {"ok": True, "items": trends.list_keywords(user)}
+        return {"ok": True, "items": trends.list_keywords(user, region)}
     except store.StoreError as e:
         return {"ok": False, "error": str(e)}
 
@@ -5174,7 +5218,8 @@ def api_trends_keyword_add(request: Request, body: dict = Body(...)):
         return {"ok": False, "error": "권한이 없습니다."}
     try:
         return {"ok": True, "item": trends.add_keyword(
-            user, str(body.get("keyword") or ""))}
+            user, str(body.get("keyword") or ""),
+            str(body.get("region") or "KR"))}
     except store.StoreError as e:
         return {"ok": False, "error": str(e)}
 
@@ -5191,26 +5236,33 @@ def api_trends_keyword_delete(request: Request, keyword_id: int):
         return {"ok": False, "error": str(e)}
 
 
+def _report_kind(region: str) -> str:
+    return "report_global" if str(region).upper() == "GLOBAL" else "report"
+
+
 @app.get("/api/trends/report")
-def api_trends_report_get(request: Request):
+def api_trends_report_get(request: Request, region: str = Query("KR")):
     user = _admin_user(request)
     if not user:
         return {"ok": False, "error": "권한이 없습니다."}
     try:
-        return {"ok": True, "report": trends.latest_report(user, "report")}
+        return {"ok": True,
+                "report": trends.latest_report(user, _report_kind(region))}
     except store.StoreError as e:
         return {"ok": False, "error": str(e)}
 
 
 @app.post("/api/trends/report")
-def api_trends_report_make(request: Request):
+def api_trends_report_make(request: Request, body: dict = Body(default={})):
     user = _admin_user(request)
     if not user:
         return {"ok": False, "error": "권한이 없습니다."}
+    region = str((body or {}).get("region") or "KR")
     try:
-        videos = trends.recent_for_ai(user)
-        data = summarize.gemini_trend_report(videos)
-        return {"ok": True, "report": trends.save_report(user, "report", data)}
+        videos = trends.recent_for_ai(user, region=region)
+        data = summarize.gemini_trend_report(videos, trends.region_label(region))
+        return {"ok": True,
+                "report": trends.save_report(user, _report_kind(region), data)}
     except (store.StoreError, summarize.SummarizeError) as e:
         return {"ok": False, "error": str(e)}
 
@@ -5232,13 +5284,15 @@ def api_trends_ideas_make(request: Request, body: dict = Body(...)):
     if not user:
         return {"ok": False, "error": "권한이 없습니다."}
     profile = str(body.get("profile") or "")
+    region = str(body.get("region") or "KR")
     try:
-        report = trends.latest_report(user, "report")
+        report = trends.latest_report(user, _report_kind(region))
         trend = report["data"] if report else None
         if not trend:
-            videos = trends.recent_for_ai(user)
-            trend = summarize.gemini_trend_report(videos)
-            trends.save_report(user, "report", trend)
+            videos = trends.recent_for_ai(user, region=region)
+            trend = summarize.gemini_trend_report(videos,
+                                                  trends.region_label(region))
+            trends.save_report(user, _report_kind(region), trend)
         ideas = summarize.gemini_content_ideas(trend, profile)
         saved = trends.save_report(user, "ideas",
                                    {"ideas": ideas, "profile": profile})

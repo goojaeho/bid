@@ -1002,5 +1002,54 @@ class TrendTest(unittest.TestCase):
         self.assertEqual(d["for_us"][0]["keyword"], "IR 피칭")
 
 
+    def test_global_region_uses_multiple_charts(self):
+        calls = []
+
+        def fake_get(path, **params):
+            calls.append((path, params.get("regionCode"), params.get("relevanceLanguage")))
+            return {"items": []}
+
+        with patch.object(trends, "_get", side_effect=fake_get), \
+             patch.object(trends, "_channel_subs", return_value={}):
+            trends.fetch_popular("GLOBAL")
+            trends.fetch_keyword("AI tools", region="GLOBAL")
+            trends.fetch_keyword("AI", region="KR")
+        charts = [c[1] for c in calls if c[0] == "videos"]
+        self.assertEqual(charts, ["US", "GB", "JP"])  # 글로벌은 3개 차트 합산
+        searches = [(c[1], c[2]) for c in calls if c[0] == "search"]
+        self.assertEqual(searches, [("US", "en"), ("KR", "ko")])
+
+    def test_region_labels(self):
+        self.assertEqual(trends.region_label("KR"), "한국")
+        self.assertEqual(trends.region_label("GLOBAL"), "글로벌")
+        self.assertEqual(trends.region_label("xx"), "한국")  # 알 수 없으면 한국
+
+    def test_rows_tagged_with_region(self):
+        items = [{"id": "a", "snippet": {"title": "t", "channelId": "c",
+                                         "channelTitle": "ch"},
+                  "statistics": {"viewCount": "1"},
+                  "contentDetails": {"duration": "PT30S"}}]
+        rows = trends._rows_from_items(items, {}, "", "popular", "GLOBAL")
+        self.assertEqual(rows[0]["region"], "GLOBAL")
+
+    def test_report_stored_per_region(self):
+        saved = {}
+        rep = {"themes": [], "hooks": [], "formats": [], "takeaway": "x"}
+        with patch.object(trends, "recent_for_ai", return_value=[{"title": "t"}]), \
+             patch.object(summarize, "gemini_trend_report", return_value=rep), \
+             patch.object(trends, "save_report",
+                          side_effect=lambda e, k, d: saved.update(kind=k) or {}):
+            self.client.post("/api/trends/report", cookies=self.admin_cookie,
+                             json={"region": "GLOBAL"})
+        self.assertEqual(saved["kind"], "report_global")
+        with patch.object(trends, "recent_for_ai", return_value=[{"title": "t"}]), \
+             patch.object(summarize, "gemini_trend_report", return_value=rep), \
+             patch.object(trends, "save_report",
+                          side_effect=lambda e, k, d: saved.update(kind=k) or {}):
+            self.client.post("/api/trends/report", cookies=self.admin_cookie,
+                             json={"region": "KR"})
+        self.assertEqual(saved["kind"], "report")
+
+
 if __name__ == "__main__":
     unittest.main()

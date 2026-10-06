@@ -444,7 +444,7 @@ def gemini_minutes(transcript: str) -> dict:
     }
 
 
-KEYWORD_PROMPT = """아래는 지금 한국에서 인기인 쇼츠 제목·태그 목록과, 콘텐츠를 만들려는 회사 정보입니다.
+KEYWORD_PROMPT = """아래는 지금 __REGION__에서 인기인 쇼츠 제목·태그 목록과, 콘텐츠를 만들려는 회사 정보입니다.
 이 회사가 "계속 추적할 만한" 검색 키워드를 JSON으로만 제안하세요. 한국어로 씁니다.
 
 {"trending": [{"keyword": "지금 쇼츠에서 뜨는 키워드", "why": "왜 뜨는지 한 줄"}],
@@ -452,7 +452,8 @@ KEYWORD_PROMPT = """아래는 지금 한국에서 인기인 쇼츠 제목·태�
 
 trending은 실제 목록에서 반복되는 소재·표현에서 5개를 뽑고,
 for_us는 회사 정보를 반영해 5개를 제안하세요.
-키워드는 유튜브 검색에 바로 쓸 수 있게 2~10자 내외의 짧은 말로 쓰세요.
+키워드는 유튜브 검색에 바로 쓸 수 있게 짧은 말로 쓰되, __REGION__ 시청자가 실제로 검색할 언어로 쓰세요
+(한국이면 한국어, 글로벌이면 영어).
 
 [회사 정보]
 __PROFILE__
@@ -462,7 +463,8 @@ __VIDEOS__
 """
 
 
-def gemini_keyword_suggestions(videos: list[dict], profile: str = "") -> dict:
+def gemini_keyword_suggestions(videos: list[dict], profile: str = "",
+                               region_label: str = "한국") -> dict:
     """수집된 인기 쇼츠 + 회사 정보 → 추적할 키워드 제안."""
     if not videos:
         raise SummarizeError("먼저 트렌드를 수집해주세요.")
@@ -471,6 +473,7 @@ def gemini_keyword_suggestions(videos: list[dict], profile: str = "") -> dict:
         tags = ", ".join((v.get("tags") or [])[:5])
         lines.append(f"{str(v.get('title',''))[:120]}" + (f" | {tags}" if tags else ""))
     prompt = (KEYWORD_PROMPT
+              .replace("__REGION__", region_label)
               .replace("__PROFILE__", (profile or "AI·콘텐츠 분야 스타트업")[:600])
               .replace("__VIDEOS__", "\n".join(lines)))
     data = _gemini_call({
@@ -492,7 +495,7 @@ def gemini_keyword_suggestions(videos: list[dict], profile: str = "") -> dict:
             "for_us": clean(out.get("for_us"))}
 
 
-TREND_PROMPT = """다음은 최근 한국에서 조회수가 빠르게 오르고 있는 쇼츠(짧은 세로 영상) 목록입니다.
+TREND_PROMPT = """다음은 최근 __REGION__에서 조회수가 빠르게 오르고 있는 쇼츠(짧은 세로 영상) 목록입니다.
 각 줄은 "제목 | 채널 | 조회수 | 시간당조회수 | 구독자대비배수 | 태그"입니다.
 
 이 데이터를 분석해 아래 JSON 형식으로만 답하세요. 설명은 모두 한국어입니다.
@@ -509,7 +512,7 @@ themes는 3~5개, hooks는 3~5개, formats는 2~4개. 단순 나열이 아니라
 """
 
 
-def gemini_trend_report(videos: list[dict]) -> dict:
+def gemini_trend_report(videos: list[dict], region_label: str = "한국") -> dict:
     """수집한 쇼츠 목록 → 주제·훅·포맷 분석 리포트 (JSON)."""
     if not videos:
         raise SummarizeError("분석할 영상이 없습니다. 먼저 트렌드를 수집해주세요.")
@@ -521,7 +524,9 @@ def gemini_trend_report(videos: list[dict]) -> dict:
             f"{v.get('views',0)}회 | 시간당 {v.get('vph',0)}회 | "
             f"x{v.get('viral',0)} | {tags}")
     data = _gemini_call({
-        "contents": [{"parts": [{"text": TREND_PROMPT + "\n".join(lines)}]}],
+        "contents": [{"parts": [{
+            "text": TREND_PROMPT.replace("__REGION__", region_label)
+            + "\n".join(lines)}]}],
         "generationConfig": {"responseMimeType": "application/json"},
     }, kind="trend", timeout=90)
     try:
