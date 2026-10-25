@@ -7,7 +7,7 @@ import secrets
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor
-from app import gmail, todos, store, desktop_auth
+from app import auth, gmail, todos, store, desktop_auth
 KST=ZoneInfo('Asia/Seoul')
 SOURCES={
  'meetings':('meetings','id,title,transcript,minutes,created_at','/meeting'),
@@ -26,7 +26,7 @@ def records(email,source,offset=0):
  if offset<0:raise ValueError('잘못된 페이지입니다.')
  page_size=200 if source=='mail' else 25
  rows=todos._request('GET',table,params={'select':fields,'email':f'eq.{owner}','order':'id.asc','offset':str(offset),'limit':str(page_size)}).json()
- return {'items':[{'source':source,'id':str(r['id']),'title':r.get('title') or r.get('subject') or r.get('name') or r.get('label') or '기록','text':json.dumps(r,ensure_ascii=False),'url':'https://www.oneaigen.com'+url} for r in rows], 'next':offset+len(rows) if len(rows)==page_size else None}
+ return {'items':[{'source':source,'id':str(r['id']),'title':r.get('title') or r.get('subject') or r.get('name') or r.get('label') or '기록','text':json.dumps(r,ensure_ascii=False),'url':auth.base_url()+url} for r in rows], 'next':offset+len(rows) if len(rows)==page_size else None}
 
 def event_body(schedule):
  title=str(schedule.get('title') or '').strip()

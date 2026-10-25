@@ -96,6 +96,35 @@ class RoutingTest(unittest.TestCase):
         for k in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "ADMIN_EMAILS"):
             os.environ.pop(k, None)
 
+    def test_canonical_host_redirect_scope(self):
+        """대표 주소 통일은 우리 호스트만 — 다른 서비스가 쓰는 호스트는 건드리지 않는다."""
+        os.environ["BASE_URL"] = "https://company.oneaigen.com"
+        try:
+            # 배포 미리보기는 대표 주소로 넘긴다
+            r = self.client.get("/login", follow_redirects=False,
+                                headers={"host": "bid-xyz.vercel.app"})
+            self.assertEqual(r.status_code, 308)
+            self.assertEqual(r.headers["location"],
+                             "https://company.oneaigen.com/login")
+            # 루트 도메인은 다른 서비스가 쓸 수 있으므로 그대로 둔다
+            for other in ("www.oneaigen.com", "oneaigen.com"):
+                r = self.client.get("/login", follow_redirects=False,
+                                    headers={"host": other})
+                self.assertEqual(r.status_code, 200, other)
+        finally:
+            os.environ.pop("BASE_URL", None)
+
+    def test_apex_redirects_to_www_when_canonical_is_www(self):
+        os.environ["BASE_URL"] = "https://www.oneaigen.com"
+        try:
+            r = self.client.get("/login", follow_redirects=False,
+                                headers={"host": "oneaigen.com"})
+            self.assertEqual(r.status_code, 308)
+            self.assertEqual(r.headers["location"],
+                             "https://www.oneaigen.com/login")
+        finally:
+            os.environ.pop("BASE_URL", None)
+
     def test_anonymous_home_redirects_to_login(self):
         r = self.client.get("/", follow_redirects=False)
         self.assertEqual((r.status_code, r.headers["location"]), (302, "/login"))
