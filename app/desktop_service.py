@@ -142,6 +142,9 @@ def poll_mail(cursor=""):
  return {'ok':True,'items':items,'new':len(rows),'backlog':len(missing)>10 or bool(listing.get('nextPageToken')),'next_cursor':cursor if len(missing)>10 else listing.get('nextPageToken',''),'coverage':'최근 7일 받은편지함을 페이지별 동기화; 과거 검색은 사이트 저장 메일 전체'}
 
 def dispatch(email,op,p):
+ if op.startswith('sync.'):
+  from app import project_sync
+  return project_sync.dispatch(email,op,p)
  if op=='records':return {'ok':True,**records(email,p.get('source'),p.get('offset',0))}
  if op=='status':
   acct=account();now=datetime.now(KST)
